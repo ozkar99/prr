@@ -23,8 +23,11 @@ function subscribe<T>(event: string, cb: (payload: T) => void): () => void {
 const api: Api = {
   reviewQueue: () => call('review_queue'),
   getPR: (owner, repo, number) => call('get_pr', { owner, repo, number }),
-  checkout: (pr) => call('checkout', { pr }),
-  readBase: (owner, repo, sha, path) => call('read_base', { owner, repo, sha, path }),
+  checkout: (pr, opts) => call('checkout', { pr, localRepo: opts?.localRepo ?? null, allowSwitch: opts?.allowSwitch ?? false }),
+  restoreLocal: (path, switchedFrom, headSha) => call('restore_local', { path, switchedFrom, headSha }),
+  readBase: (root, sha, path) => call('read_base', { root, sha, path }),
+  diskUsage: () => call('disk_usage'),
+  clearCheckouts: (includeClones) => call('clear_checkouts', { includeClones }),
   fsStat: (path) => call('fs_stat', { path }),
   fsRead: async (path) => new Uint8Array(await call<ArrayBuffer>('fs_read', { path })),
   fsReaddir: (path) => call('fs_readdir', { path }),

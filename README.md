@@ -75,8 +75,22 @@ If the app is already open, the PR opens in the existing window.
 You can also run `review-tool` with no PR (outside a repo) and pick one in the app: from
 **Review requested** / **Your pull requests**, or by pasting a URL or `owner/repo#123`.
 
-The first PR from a repo clones it, once per repo; big repos take a while. Later PRs from the
-same repo only fetch what's new.
+#### Where the code comes from
+
+- **Inside your own clone of the PR's repo**, `review-tool` reviews the PR right there: no second
+  copy, which matters for big monorepos, and your language-server caches are reused. The PR's
+  commits are fetched into your clone without adding any branches or refs. If your clone isn't
+  already at the PR (e.g. after `gh pr checkout`), the app asks before switching it, and switches
+  it back to your branch when you close the PR. It won't switch a clone with uncommitted changes;
+  you can review in a separate checkout instead.
+- **Anywhere else** (or from the app's PR list), the app uses its own copy: one clone per repo,
+  shared by its PRs, plus a checkout per PR. The clone is blobless (history without file
+  contents), so even a large repo's first PR opens quickly; later PRs only fetch what's new.
+
+The app's checkouts live in `~/Library/Application Support/review-tool/`. Ones you haven't opened
+for 14 days are removed automatically, and the **Storage** section at the bottom of the home
+screen shows how much space they take, with buttons to clear them. Your own clones are never
+touched by cleanup.
 
 ### Reading the code
 
@@ -228,8 +242,9 @@ For scripted testing, a development build started with `REVIEW_TOOL_DEBUG_EVAL=<
 JavaScript POSTed to `http://127.0.0.1:<port>/` in the window and returns the JSON result
 (WebKit has no Chrome-style remote protocol). This hook isn't compiled into release builds.
 
-Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one bare clone per repo,
-`worktrees/` one checkout per PR. Delete either to free space; they're re-created on demand.
+Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one blobless bare clone
+per repo, `worktrees/` one checkout per PR (see `src-tauri/src/git.rs`; cleanup in
+`src-tauri/src/cleanup.rs`).
 
 ### Releasing
 

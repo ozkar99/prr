@@ -7,6 +7,9 @@ pub struct PRRef {
     pub owner: String,
     pub repo: String,
     pub number: u64,
+    /// The user's clone of the repo, when `review-tool` was run inside one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_repo: Option<String>,
 }
 
 /// Parses a PR URL or owner/repo#123.
@@ -15,7 +18,7 @@ pub fn parse_pr_ref(input: &str) -> Option<PRRef> {
     let short = regex::Regex::new(r"^([\w.-]+)/([\w.-]+)#(\d+)$").unwrap();
     let s = input.trim();
     let caps = url.captures(s).or_else(|| short.captures(s))?;
-    Some(PRRef { owner: caps[1].into(), repo: caps[2].into(), number: caps[3].parse().ok()? })
+    Some(PRRef { owner: caps[1].into(), repo: caps[2].into(), number: caps[3].parse().ok()?, local_repo: None })
 }
 
 #[derive(Serialize, Clone)]
@@ -74,6 +77,25 @@ pub struct Checkout {
     pub root: String,
     pub merge_base: String,
     pub head_sha: String,
+    /// Set when the PR is shown in the user's own clone, not an app-managed worktree.
+    pub local: Option<LocalClone>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalClone {
+    pub path: String,
+    /// The branch (or commit) the clone was on before switching to the PR, to restore on close.
+    pub switched_from: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CheckoutResult {
+    Ready(Checkout),
+    /// The user's clone isn't at the PR head; ask before switching it (refused when dirty).
+    #[serde(rename_all = "camelCase")]
+    NeedsSwitch { path: String, current: String, dirty: bool },
 }
 
 #[derive(Serialize)]

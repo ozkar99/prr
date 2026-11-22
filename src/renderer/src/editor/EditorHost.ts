@@ -215,7 +215,7 @@ export class EditorHost {
     }
 
     const baseText =
-      file.status === 'added' ? '' : ((await window.api.readBase(owner, repo, this.checkout.mergeBase, file.previousPath ?? file.path)) ?? '')
+      file.status === 'added' ? '' : ((await window.api.readBase(this.checkout.root, this.checkout.mergeBase, file.previousPath ?? file.path)) ?? '')
     const original = monaco.editor.createModel(
       baseText,
       modified.getLanguageId(),

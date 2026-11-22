@@ -1,4 +1,5 @@
 mod agent;
+mod cleanup;
 mod cli;
 mod deps;
 mod devtools;
@@ -23,8 +24,12 @@ use types::*;
 /// A PR the app was launched with (`review-tool <pr>`), consumed once by the page.
 struct LaunchPR(Mutex<Option<PRRef>>);
 
+/// `--open-pr=<url>` plus, when `review-tool` ran inside a clone of that repo, `--local-repo=<path>`.
 fn pr_from_args<I: IntoIterator<Item = String>>(args: I) -> Option<PRRef> {
-    args.into_iter().find_map(|a| a.strip_prefix("--open-pr=").and_then(parse_pr_ref))
+    let args: Vec<String> = args.into_iter().collect();
+    let mut pr = args.iter().find_map(|a| a.strip_prefix("--open-pr=").and_then(parse_pr_ref))?;
+    pr.local_repo = args.iter().find_map(|a| a.strip_prefix("--local-repo=").map(String::from));
+    Some(pr)
 }
 
 // ---- Commands (same surface as the Electron preload's window.api) ----
@@ -39,17 +44,34 @@ async fn get_pr(owner: String, repo: String, number: u64) -> Result<PRDetails, S
     github::get_pr(&owner, &repo, number).await
 }
 
+/// Checks out a PR: in the user's clone when `local_repo` is set, otherwise in an app-managed worktree.
 #[tauri::command]
-async fn checkout(app: AppHandle, pr: PRDetails) -> Result<Checkout, String> {
-    git::checkout(&pr, |msg| {
+async fn checkout(app: AppHandle, pr: PRDetails, local_repo: Option<String>, allow_switch: bool) -> Result<CheckoutResult, String> {
+    git::checkout(&pr, local_repo.as_deref(), allow_switch, |msg| {
         let _ = app.emit("progress", msg);
     })
     .await
 }
 
+/// Switches the user's clone back after reviewing (only if it's still at the PR head, unchanged).
 #[tauri::command]
-async fn read_base(owner: String, repo: String, sha: String, path: String) -> Result<Option<String>, String> {
-    git::read_at_commit(&owner, &repo, &sha, &path).await
+async fn restore_local(path: String, switched_from: String, head_sha: String) -> Result<bool, String> {
+    git::restore_local(&path, &switched_from, &head_sha).await
+}
+
+#[tauri::command]
+async fn read_base(root: String, sha: String, path: String) -> Result<Option<String>, String> {
+    git::read_at_commit(&root, &sha, &path).await
+}
+
+#[tauri::command]
+async fn disk_usage() -> cleanup::DiskUsage {
+    tauri::async_runtime::spawn_blocking(cleanup::usage).await.unwrap_or(cleanup::DiskUsage { worktrees: 0, worktree_bytes: 0, repos: 0, repo_bytes: 0 })
+}
+
+#[tauri::command]
+async fn clear_checkouts(include_clones: bool) {
+    cleanup::clear(include_clones).await
 }
 
 #[tauri::command]
@@ -254,13 +276,17 @@ pub fn run() {
                 .on_navigation(move |url| allow_navigation(&nav, url))
                 .build()?;
             devtools::start(&handle);
+            tauri::async_runtime::spawn(cleanup::on_startup());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             review_queue,
             get_pr,
             checkout,
+            restore_local,
             read_base,
+            disk_usage,
+            clear_checkouts,
             fs_stat,
             fs_read,
             fs_readdir,

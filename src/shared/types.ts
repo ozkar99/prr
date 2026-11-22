@@ -1,4 +1,10 @@
-export type PRRef = { owner: string; repo: string; number: number }
+export type PRRef = {
+  owner: string
+  repo: string
+  number: number
+  /** The user's clone of the repo, when `review-tool` was run inside one. */
+  localRepo?: string
+}
 
 /** Parses a PR URL or owner/repo#123. */
 export function parsePRRef(input: string): PRRef | undefined {
@@ -144,12 +150,21 @@ export type PRDetails = {
 }
 
 export type Checkout = {
-  /** Absolute path of the worktree checked out at the PR head. */
+  /** Absolute path of the checkout at the PR head: an app-managed worktree, or the user's clone. */
   root: string
   /** Commit the diff is computed against (merge-base of base and head, like GitHub). */
   mergeBase: string
   headSha: string
+  /** Set when reviewing in the user's own clone. */
+  local: { path: string; switchedFrom: string | null } | null
 }
+
+export type CheckoutResult =
+  | ({ kind: 'ready' } & Checkout)
+  /** The user's clone isn't at the PR head: ask before switching it (not possible when dirty). */
+  | { kind: 'needsSwitch'; path: string; current: string; dirty: boolean }
+
+export type DiskUsage = { worktrees: number; worktreeBytes: number; repos: number; repoBytes: number }
 
 export type LspLanguage = 'go' | 'cpp' | 'python' | 'starlark' | 'shell'
 
@@ -158,8 +173,16 @@ export type FileStat = { type: 'file' | 'directory'; size: number; mtime: number
 export type Api = {
   reviewQueue(): Promise<PRSummary[]>
   getPR(owner: string, repo: string, number: number): Promise<PRDetails>
-  checkout(pr: PRDetails): Promise<Checkout>
-  readBase(owner: string, repo: string, sha: string, path: string): Promise<string | null>
+  /** Checks out the PR in the user's clone (`localRepo`) or an app-managed worktree. */
+  checkout(pr: PRDetails, opts?: { localRepo?: string; allowSwitch?: boolean }): Promise<CheckoutResult>
+  /** Switches the user's clone back after review; false if it was left alone (moved on or changed). */
+  restoreLocal(path: string, switchedFrom: string, headSha: string): Promise<boolean>
+  /** A file at a commit, read from the checkout's repository. */
+  readBase(root: string, sha: string, path: string): Promise<string | null>
+  /** Disk used by app-managed clones and PR checkouts. */
+  diskUsage(): Promise<DiskUsage>
+  /** Removes app-managed PR checkouts, and with `includeClones` the clones too. Never touches the user's own clones. */
+  clearCheckouts(includeClones: boolean): Promise<void>
   fsStat(path: string): Promise<FileStat | null>
   fsRead(path: string): Promise<Uint8Array>
   fsReaddir(path: string): Promise<[string, 'file' | 'directory'][]>

@@ -198,6 +198,11 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
           {pr.title}
         </span>
         <span className="spacer" />
+        {checkout.local && (
+          <span className="chip" title={`Reviewing in your clone at ${checkout.local.path}`}>
+            your clone
+          </span>
+        )}
         {Object.entries(lsp).map(([lang, state]) => (
           <span
             key={lang}

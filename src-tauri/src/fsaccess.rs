@@ -9,6 +9,25 @@ use std::time::UNIX_EPOCH;
 use tokio::sync::OnceCell;
 
 static ROOTS: OnceCell<Vec<PathBuf>> = OnceCell::const_new();
+/// Users' own clones opened for review this session.
+static LOCAL_ROOTS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Lets the editor read a user's clone that a PR is being reviewed in.
+pub fn allow_root(path: &std::path::Path) {
+    if let Ok(real) = path.canonicalize() {
+        let mut roots = LOCAL_ROOTS.lock().unwrap();
+        if !roots.contains(&real) {
+            roots.push(real);
+        }
+    }
+}
+
+/// Whether `path` is a checkout the app opened: an app-managed worktree or an allowed user clone.
+pub async fn is_checkout_root(path: &std::path::Path) -> bool {
+    let Ok(real) = tokio::fs::canonicalize(path).await else { return false };
+    let worktrees = tokio::fs::canonicalize(worktrees_dir()).await.ok();
+    worktrees.is_some_and(|w| real.starts_with(w)) || LOCAL_ROOTS.lock().unwrap().contains(&real)
+}
 
 /// Where the bundled (or, in development, the npm-installed) pyright lives.
 pub static PYRIGHT_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
@@ -55,7 +74,8 @@ async fn allowed_roots() -> &'static Vec<PathBuf> {
 
 async fn checked(path: &str) -> Result<PathBuf, String> {
     let real = tokio::fs::canonicalize(path).await.map_err(|e| format!("{path}: {e}"))?;
-    if allowed_roots().await.iter().any(|root| real.starts_with(root)) {
+    let local = LOCAL_ROOTS.lock().unwrap().iter().any(|root| real.starts_with(root));
+    if local || allowed_roots().await.iter().any(|root| real.starts_with(root)) {
         Ok(real)
     } else {
         Err(format!("Access outside allowed folders: {path}"))

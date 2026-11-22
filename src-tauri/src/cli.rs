@@ -41,6 +41,19 @@ fn resolve_pr(arg: Option<&str>) -> Option<String> {
     fail(&format!("don't understand \"{arg}\" (expected a PR URL, owner/repo#123, or a number)"))
 }
 
+/// When the current directory is inside a clone of the PR's repo, its top-level
+/// path: the app then reviews the PR in that clone instead of its own checkout.
+fn local_clone_for(pr_url: &str) -> Option<String> {
+    let pr = crate::types::parse_pr_ref(pr_url)?;
+    let top = Command::new("git").args(["rev-parse", "--show-toplevel"]).stderr(Stdio::null()).output().ok()?;
+    if !top.status.success() {
+        return None;
+    }
+    let repo = gh(&["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])?;
+    repo.eq_ignore_ascii_case(&format!("{}/{}", pr.owner, pr.repo))
+        .then(|| String::from_utf8_lossy(&top.stdout).trim().to_string())
+}
+
 /// The .app bundle this binary is in, if any (Contents/MacOS/<binary>).
 fn app_bundle() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
@@ -70,8 +83,16 @@ pub fn handle(args: &[String]) -> bool {
     }
 
     let url = resolve_pr(user_args.first().copied());
-    let pr_args: Vec<String> = url.iter().map(|u| format!("--open-pr={u}")).collect();
-    println!("{}", url.as_ref().map(|u| format!("Opening {u}")).unwrap_or_else(|| "Opening Review Tool".into()));
+    let local = url.as_deref().and_then(local_clone_for);
+    let mut pr_args: Vec<String> = url.iter().map(|u| format!("--open-pr={u}")).collect();
+    if let Some(path) = &local {
+        pr_args.push(format!("--local-repo={path}"));
+    }
+    match (&url, &local) {
+        (Some(u), Some(path)) => println!("Opening {u} in your clone at {path}"),
+        (Some(u), None) => println!("Opening {u}"),
+        _ => println!("Opening Review Tool"),
+    }
 
     let launched = match app_bundle() {
         // -n starts a new process even if the app is running; the single-instance

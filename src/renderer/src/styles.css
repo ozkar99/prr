@@ -233,3 +233,11 @@ h3:where(.home *) { font-size: 12px; text-transform: uppercase; letter-spacing: 
 .tool-list li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .tool-problem { color: var(--warn); font-size: 12px; }
 .tool-fix { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; cursor: copy; user-select: all; }
+
+/* Switching the user's clone; storage */
+.switch-card { margin: 10px 0; }
+.switch-card code, .storage-note code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+.switch-actions { display: flex; gap: 8px; align-items: center; }
+.storage { margin-top: 28px; }
+.storage-row { display: flex; gap: 8px; align-items: center; }
+.storage-note { font-size: 12px; margin-top: 6px; }
