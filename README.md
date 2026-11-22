@@ -16,10 +16,11 @@ peek views, Markdown renderer) as npm packages via
 
 | Tool | Why | Install |
 |---|---|---|
-| Rust | builds the app | `curl https://sh.rustup.rs -sSf \| sh` ([rustup](https://rustup.rs)) |
-| Node.js 20+ | builds the frontend; runs pyright for Python | `brew install node` |
-| git | checks out PRs | Xcode Command Line Tools (`xcode-select --install`) |
-| GitHub CLI, logged in | the app reuses its login, so there's no separate sign-in | `brew install gh`, then `gh auth login` |
+| Homebrew | installs and updates the app | [brew.sh](https://brew.sh) |
+| Xcode Command Line Tools | git (checking out PRs) and clangd (C/C++) | `xcode-select --install` |
+
+Homebrew also installs the GitHub CLI (`gh`) and Node.js with the app. The app uses `gh`'s login,
+so log in once after installing: `gh auth login`.
 
 Language servers. Syntax highlighting works without them; they add hover types and navigation.
 Install only the ones for languages you review:
@@ -33,28 +34,23 @@ Install only the ones for languages you review:
 
 A missing server shows as **not installed** in the app's header; hover over it for the install command.
 
-### 2. Install and build
+### 2. Install
 
 ```sh
-git clone git@github.com:ozkar99/review-tool.git
-cd review-tool
-npm install
-npm run build
+brew tap ozkar99/review-tool https://github.com/ozkar99/review-tool
+brew install review-tool
 ```
 
-The first build compiles the Rust dependencies and takes a few minutes. The result is
-`src-tauri/target/release/bundle/macos/Review Tool.app`.
-
-### 3. Add the `review-tool` command
-
-The app's own binary is the command. Link it onto your `PATH`:
+Homebrew builds the app on your Mac (the first install takes a few minutes and pulls in Rust and
+Node as build tools). Because it's built locally, macOS opens it without any security prompt. This
+also puts the `review-tool` command on your `PATH`. To open the app from Launchpad or Spotlight
+too:
 
 ```sh
-ln -sf "$PWD/src-tauri/target/release/bundle/macos/Review Tool.app/Contents/MacOS/review-tool" /opt/homebrew/bin/review-tool
+ln -sf "$(brew --prefix review-tool)/Review Tool.app" ~/Applications/
 ```
 
-(Any directory on your `PATH` works; `/opt/homebrew/bin` is there on Apple Silicon Macs with
-Homebrew.) After pulling new changes, run `npm run build` again.
+Update with `brew upgrade review-tool`.
 
 On first launch the home screen checks for the tools above and shows the install command for
 anything missing.
@@ -190,6 +186,32 @@ PR code is untrusted, so the app never builds or runs it. In particular:
 
 ## Development
 
+### Building from source
+
+Needs Rust ([rustup](https://rustup.rs)) and Node.js 20+.
+
+```sh
+git clone git@github.com:ozkar99/review-tool.git
+cd review-tool
+npm install
+npm run build
+```
+
+The first build compiles the Rust dependencies and takes a few minutes. The result is
+`src-tauri/target/release/bundle/macos/Review Tool.app`.
+
+#### The `review-tool` command
+
+The app's own binary is the command. Link it onto your `PATH`:
+
+```sh
+ln -sf "$PWD/src-tauri/target/release/bundle/macos/Review Tool.app/Contents/MacOS/review-tool" /opt/homebrew/bin/review-tool
+```
+
+(Any directory on your `PATH` works; `/opt/homebrew/bin` is there on Apple Silicon Macs with
+Homebrew.) After pulling new changes, run `npm run build` again.
+
+
 ```sh
 npm run dev        # app with hot reload (frontend) and auto-rebuild (Rust)
 npm run typecheck
@@ -209,15 +231,18 @@ Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one bar
 
 ### Releasing
 
-Push a version tag to build a universal (Apple Silicon + Intel) app and attach it to a draft
+1. Bump `version` in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, commit, and push.
+2. Tag it: `git tag -a v0.2.0 -m "Review Tool v0.2.0" && git push origin v0.2.0`
+3. Point the formula at the new tag: in `Formula/review-tool.rb`, update `url` to the new tag and
+   `sha256` to `curl -sL <url> | shasum -a 256`, then commit and push. Teammates get it with
+   `brew upgrade review-tool`.
+
+The tag also triggers a CI build of a universal app (unsigned unless the Apple secrets below are
+set) attached to a draft GitHub Release. Push a version tag to build a universal (Apple Silicon + Intel) app and attach it to a draft
 GitHub Release:
 
-```sh
-# bump "version" in src-tauri/tauri.conf.json, src-tauri/Cargo.toml and package.json, then:
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-Review the draft on GitHub and publish it. **Actions → Release → Run workflow** builds without
+Review the draft on GitHub and publish it if you want a downloadable `.dmg` (not needed for
+Homebrew installs). **Actions → Release → Run workflow** builds without
 releasing (the app is attached to the run as an artifact).
 
 Without Apple signing the app is unsigned, and macOS blocks it when downloaded. To sign and
