@@ -12,6 +12,7 @@ mod lsp;
 mod markdown;
 mod pr_view;
 mod review;
+mod terminal;
 mod theme;
 mod ui;
 
@@ -26,8 +27,32 @@ fn launch_pr() -> Option<backend::types::PRRef> {
     Some(pr)
 }
 
+/// When launched from inside a Claude Code session (e.g. `review-tool` typed in its
+/// terminal), drop that session's markers so the agent panel starts its own,
+/// independent session. User settings like CLAUDE_CODE_USE_BEDROCK are kept.
+fn forget_parent_agent_session() {
+    let markers = ["CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SSE_PORT"];
+    let prefixes = ["CLAUDE_CODE_CHILD_", "CLAUDE_CODE_MESSAGING_", "CLAUDE_CODE_SESSION_"];
+    for (key, _) in std::env::vars_os() {
+        let Some(key) = key.to_str() else { continue };
+        if markers.contains(&key) || prefixes.iter().any(|p| key.starts_with(p)) {
+            // SAFETY: called at startup, before any other threads exist.
+            unsafe { std::env::remove_var(key) };
+        }
+    }
+}
+
 fn main() {
+    // `review-tool --mcp-stdio <url> <token>`: the stdio MCP bridge agents start (no UI).
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--mcp-stdio") {
+        if let (Some(url), Some(token)) = (args.get(2), args.get(3)) {
+            backend::agent::run_stdio_bridge(url, token);
+        }
+        return;
+    }
     backend::exec::augment_path();
+    forget_parent_agent_session();
     let launch = launch_pr();
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);

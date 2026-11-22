@@ -9,22 +9,29 @@ use gpui::*;
 use crate::diffview::{CodeSelection, Diff, DiffChangeIndicator, DiffEvent, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState, TokenHit};
 use crate::backend::mcp;
 use crate::lsp::{self, LspClient};
+use crate::terminal::{self, TerminalEvent, TerminalView};
 use crate::review::{Conversation, Review, ReviewPanel, ReviewPanelEvent, ThreadView, ThreadZone};
 use crate::diffview::{DiffAnnotation, DiffLineRange};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use serde_json::{Value, json};
+use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::text::TextView;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-actions!(review_tool, [GoBack, GoToDefinition, FindReferences, ClosePopup]);
+actions!(review_tool, [GoBack, GoToDefinition, FindReferences, ClosePopup, ToggleAgent, AskAgent, ExplainAgent, AddComment]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("ctrl--", GoBack, None),
+        // Inside the agent's terminal these keys go to the agent (as in the web version).
+        KeyBinding::new("ctrl--", GoBack, Some("PrView && !Terminal")),
+        KeyBinding::new("cmd-j", ToggleAgent, Some("PrView")),
+        KeyBinding::new("cmd-l", AskAgent, Some("PrView && !Terminal")),
+        KeyBinding::new("cmd-shift-l", ExplainAgent, Some("PrView && !Terminal")),
+        KeyBinding::new("cmd-alt-c", AddComment, Some("PrView && !Terminal")),
         KeyBinding::new("f12", GoToDefinition, None),
         KeyBinding::new("shift-f12", FindReferences, None),
         KeyBinding::new("escape", ClosePopup, Some("PrView")),
@@ -107,6 +114,13 @@ fn side_of(name: &str) -> DiffSide {
     if name == "LEFT" { DiffSide::Original } else { DiffSide::Modified }
 }
 
+enum AgentStatus {
+    Idle,
+    Running,
+    Exited,
+    Failed(String),
+}
+
 pub struct PrView {
     pub pr: PRDetails,
     pub checkout: Checkout,
@@ -143,6 +157,17 @@ pub struct PrView {
     show_outdated: bool,
     outdated_views: HashMap<String, Entity<ThreadView>>,
     _subs: Vec<Subscription>,
+    agent_name: String,
+    agent_open: bool,
+    agent_height: f32,
+    agent: Option<Entity<TerminalView>>,
+    agent_status: AgentStatus,
+    /// (window y, height) while the splitter is dragged.
+    splitter_drag: Option<(Pixels, f32)>,
+    /// What the reviewer last selected or clicked (for ⌘L / ⌘⇧L).
+    last_selection: Option<Value>,
+    /// The symbol under the pointer (for the right-click menu).
+    hovered_token: Option<TokenHit>,
 }
 
 impl EventEmitter<PrViewEvent> for PrView {}
@@ -159,7 +184,7 @@ fn status_letter(status: &str) -> (&'static str, u32) {
 }
 
 impl PrView {
-    pub fn new(pr: PRDetails, checkout: Checkout, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(pr: PRDetails, checkout: Checkout, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let first = pr.files.iter().position(|f| f.status != "removed").or(if pr.files.is_empty() { None } else { Some(0) });
         let review = cx.new(|cx| Review::new(&pr, cx));
         let review_sub = cx.observe(&review, |_, _, cx| cx.notify());
@@ -191,6 +216,14 @@ impl PrView {
             show_outdated: false,
             outdated_views: HashMap::new(),
             _subs: vec![review_sub],
+            agent_name: crate::backend::agent::info().name,
+            agent_open: false,
+            agent_height: 300.,
+            agent: None,
+            agent_status: AgentStatus::Idle,
+            splitter_drag: None,
+            last_selection: None,
+            hovered_token: None,
         };
         // The agent sees the PR and the selection through the app's MCP tools.
         let pr = &view.pr;
@@ -209,6 +242,8 @@ impl PrView {
             }
         }));
         view.start_language_servers(cx);
+        // So the PR's shortcuts (⌘J, ⌘L, F12, …) work before anything is clicked.
+        window.focus(&view.focus, cx);
         if let Some(ix) = first {
             view.show(Shown::File(ix), None, false, cx);
         }
@@ -267,6 +302,23 @@ impl PrView {
         let zone = self.zone(&key, &file.path, side, line, cx);
         zone.update(cx, |z, cx| z.open_composer(start_line, window, cx));
         cx.notify();
+    }
+
+    /// "Add Review Comment" (⌘⌥C, right-click menu): on the selection, or the clicked line.
+    fn add_comment_at_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Shown::File(ix)) = self.shown.clone() else { return };
+        let Some(path) = self.pr.files.get(ix).map(|f| f.path.clone()) else { return };
+        let range = match &self.last_selection {
+            Some(sel) => {
+                let side = if sel["side"] == "old" { DiffSide::Original } else { DiffSide::Modified };
+                DiffLineRange::new(path, side, sel["startLine"].as_u64().unwrap_or(1) as usize, sel["endLine"].as_u64().unwrap_or(1) as usize)
+            }
+            None => match &self.last_token {
+                Some(t) => DiffLineRange::new(path, t.position.side(), t.position.line(), t.position.line()),
+                None => return,
+            },
+        };
+        self.add_comment(&range, window, cx);
     }
 
     fn zone(&mut self, key: &str, path: &str, side: &str, line: u64, cx: &mut Context<Self>) -> Entity<ThreadZone> {
@@ -499,6 +551,7 @@ impl PrView {
             "cursorOnly": cursor_only,
             "text": text,
         });
+        self.last_selection = Some(value.clone());
         self.selection_seq += 1;
         let seq = self.selection_seq;
         cx.spawn(async move |this, cx| {
@@ -510,8 +563,220 @@ impl PrView {
         .detach();
     }
 
+    // ---- Agent panel ----
+
+    fn toggle_agent(&mut self, _: &ToggleAgent, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent_open = !self.agent_open;
+        if self.agent_open {
+            self.ensure_agent(window, cx);
+            if let Some(t) = &self.agent {
+                t.update(cx, |t, cx| t.focus(window, cx));
+            }
+        } else {
+            window.focus(&self.focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// Starts the agent unless it's running.
+    fn ensure_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.agent_status, AgentStatus::Running) {
+            return;
+        }
+        if let Some(old) = self.agent.take() {
+            old.update(cx, |t, _| t.kill());
+        }
+        let pr = &self.pr;
+        let label = format!("{}/{}#{} (\"{}\")", pr.owner, pr.repo, pr.number, pr.title);
+        let launch = match crate::backend::agent::launch(&label, &self.checkout.merge_base, &self.checkout.root) {
+            Ok(l) => l,
+            Err(e) => {
+                self.agent_status = AgentStatus::Failed(e);
+                cx.notify();
+                return;
+            }
+        };
+        let started = match TerminalView::start(launch.program, launch.args, launch.env, self.checkout.root.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                self.agent_status = AgentStatus::Failed(e);
+                cx.notify();
+                return;
+            }
+        };
+        let view = cx.new(|cx| TerminalView::new(started, cx));
+        let sub = cx.subscribe(&view, |this, _, ev: &TerminalEvent, cx| match ev {
+            TerminalEvent::Exited => {
+                this.agent_status = AgentStatus::Exited;
+                cx.notify();
+            }
+        });
+        self._subs.push(sub);
+        view.update(cx, |t, cx| t.focus(window, cx));
+        self.agent = Some(view);
+        self.agent_status = AgentStatus::Running;
+        cx.notify();
+    }
+
+    fn restart_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent_status = AgentStatus::Idle;
+        self.ensure_agent(window, cx);
+    }
+
+    /// ⌘L: type "About <file> lines A-B: " for the user to finish; ⌘⇧L: send "Explain …" right away.
+    fn ask_agent(&mut self, explain: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let text = match &self.last_selection {
+            None => String::new(),
+            Some(sel) => {
+                let (start, end) = (sel["startLine"].as_u64().unwrap_or(0), sel["endLine"].as_u64().unwrap_or(0));
+                let lines = if start == end { format!("line {start}") } else { format!("lines {start}-{end}") };
+                let side = if sel["side"] == "old" { " (old version, before the PR)" } else { "" };
+                let what = format!("{} {lines}{side}", sel["path"].as_str().unwrap_or(""));
+                if explain { format!("Explain {what}.") } else { format!("About {what}: ") }
+            }
+        };
+        let submit = explain && self.last_selection.is_some();
+        self.agent_open = true;
+        let fresh = !matches!(self.agent_status, AgentStatus::Running);
+        self.ensure_agent(window, cx);
+        let Some(term) = self.agent.clone() else { return };
+        term.update(cx, |t, cx| t.focus(window, cx));
+        cx.notify();
+        if text.is_empty() {
+            return;
+        }
+        cx.spawn(async move |_, cx| {
+            if fresh {
+                // Wait for the agent to finish drawing its UI (output goes quiet), at most 10s,
+                // and never type into a confirmation prompt (wait up to 5 minutes for the user).
+                let begin = std::time::Instant::now();
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    let (prompt, settled, exited) = term.read_with(cx, |t, _| (t.shows_confirmation_prompt(), terminal::settled(t, std::time::Instant::now()), t.exited));
+                    if exited {
+                        return;
+                    }
+                    let waited = begin.elapsed();
+                    if prompt {
+                        if waited > Duration::from_secs(300) {
+                            return;
+                        }
+                        continue;
+                    }
+                    if settled || waited > Duration::from_secs(10) {
+                        break;
+                    }
+                }
+            }
+            // Enter goes separately, a moment later: a fast burst reads as a paste, where Enter doesn't submit.
+            term.update(cx, |t, _| t.write(text.into_bytes()));
+            if submit {
+                cx.background_executor().timer(Duration::from_millis(250)).await;
+                term.update(cx, |t, _| t.write(&b"\r"[..]));
+            }
+        })
+        .detach();
+    }
+
+    fn render_agent_dock(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.agent_open {
+            return None;
+        }
+        let overlay = match &self.agent_status {
+            AgentStatus::Exited => Some((
+                "The agent exited.".to_string(),
+                theme::FG,
+                ui::primary_button("agent-restart", "Restart").on_click(cx.listener(|this, _, window, cx| this.restart_agent(window, cx))),
+            )),
+            AgentStatus::Failed(e) => Some((
+                e.clone(),
+                theme::DEL,
+                ui::button("agent-retry", "Retry").on_click(cx.listener(|this, _, window, cx| this.restart_agent(window, cx))),
+            )),
+            _ => None,
+        };
+        Some(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .id("agent-splitter")
+                        .h(px(5.))
+                        .flex_shrink_0()
+                        .cursor_row_resize()
+                        .bg(hsla(theme::BORDER))
+                        .border_t_2()
+                        .border_color(hsla(theme::BG))
+                        .hover(|el| el.bg(hsla(theme::ACCENT)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                                this.splitter_drag = Some((ev.position.y, this.agent_height));
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .h(px(self.agent_height))
+                        .flex()
+                        .flex_col()
+                        .bg(hsla(theme::PANEL))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .px(px(12.))
+                                .py(px(3.))
+                                .text_size(theme::TEXT_SMALL)
+                                .border_b_1()
+                                .border_color(hsla(theme::BORDER))
+                                .child(format!("✦ {}", self.agent_name))
+                                .child(ui::muted(terminal::status_line_hint()))
+                                .child(div().flex_1())
+                                .child(ui::link("agent-hide", "✕").on_click(cx.listener(|this, _, window, cx| this.toggle_agent(&ToggleAgent, window, cx)))),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .flex_1()
+                                .min_h_0()
+                                .bg(hsla(terminal::BG))
+                                .pt(px(4.))
+                                .pl(px(10.))
+                                .children(self.agent.clone())
+                                .children(overlay.map(|(text, color, button)| {
+                                    div().absolute().inset_0().flex().items_center().justify_center().child(
+                                        div()
+                                            .max_w(relative(0.8))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(10.))
+                                            .px(px(16.))
+                                            .py(px(12.))
+                                            .bg(hsla(theme::BG))
+                                            .border_1()
+                                            .border_color(hsla(theme::BORDER))
+                                            .rounded(px(8.))
+                                            .text_color(hsla(color))
+                                            .child(text)
+                                            .child(button),
+                                    )
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// Leaving the PR: stop its servers and clear the agent's context.
-    pub fn close(&mut self) {
+    pub fn close(&mut self, cx: &mut App) {
+        if let Some(agent) = self.agent.take() {
+            agent.update(cx, |t, _| t.kill());
+        }
         self.selection_seq += 1;
         mcp::set_review(Value::Null);
         self.stop_language_servers();
@@ -558,6 +823,9 @@ impl PrView {
     }
 
     fn on_token_hover(&mut self, hit: Option<TokenHit>, cx: &mut Context<Self>) {
+        if hit.is_some() {
+            self.hovered_token = hit.clone();
+        }
         self.hover_seq += 1;
         let seq = self.hover_seq;
         let Some(hit) = hit else {
@@ -716,7 +984,11 @@ impl PrView {
                 let url = pr.url.clone();
                 ui::link("open-github", "Open on GitHub").on_click(move |_, _, cx| cx.open_url(&url))
             })
-            .child(ui::button("agent", "✦ Claude Code"))
+            .child(
+                ui::button("agent", format!("✦ {}", self.agent_name))
+                    .when(self.agent_open, |el| el.bg(hsla(theme::ACTIVE)).border_color(hsla(theme::ACCENT)))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_agent(&ToggleAgent, window, cx))),
+            )
             .child({
                 let pending = self.review.read(cx).pending_count();
                 let ready = self.review.read(cx).state.is_some();
@@ -1009,7 +1281,40 @@ impl PrView {
             .child(match &self.file_view {
                 FileView::Diff(state) => {
                     let (hover_view, click_view) = (weak.clone(), weak.clone());
-                    div().flex_1().min_h_0().child(
+                    let focus = self.focus.clone();
+                    div()
+                        .id("code")
+                        .flex_1()
+                        .min_h_0()
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                // Right-click acts on the symbol under the pointer, like moving the cursor there.
+                                if let Some(hit) = this.hovered_token.clone() {
+                                    this.last_token = Some(hit.clone());
+                                    let (side, line) = (hit.position.side(), hit.position.line());
+                                    if let FileView::Diff(state) = &this.file_view
+                                        && state.read(cx).text_selection(cx).is_none()
+                                        && let Some(text) = state.read(cx).line_text(side, line)
+                                    {
+                                        let sel = CodeSelection { path: hit.position.path().clone(), side, start_line: line, end_line: line, text };
+                                        this.report_selection(sel, true, cx);
+                                    }
+                                }
+                                window.focus(&this.focus, cx);
+                            }),
+                        )
+                        .context_menu(move |menu, _, _| {
+                            menu.action_context(focus.clone())
+                                .menu("Go to Definition", Box::new(GoToDefinition))
+                                .menu("Find All References", Box::new(FindReferences))
+                                .separator()
+                                .menu("Add Review Comment", Box::new(AddComment))
+                                .separator()
+                                .menu("Agent: About this code", Box::new(AskAgent))
+                                .menu("Agent: Explain this code", Box::new(ExplainAgent))
+                        })
+                        .child(
                         Diff::new(state)
                             .size_full()
                             .line_number(true)
@@ -1069,8 +1374,9 @@ impl PrView {
                             }),
                     )
                 }
-                FileView::Loading => div().flex_1(),
-                FileView::Message(m) => div().flex_1().flex().items_center().justify_center().child(ui::muted(m.clone())),
+                .into_any_element(),
+                FileView::Loading => div().flex_1().into_any_element(),
+                FileView::Message(m) => div().flex_1().flex().items_center().justify_center().child(ui::muted(m.clone())).into_any_element(),
             })
             .into_any_element()
     }
@@ -1251,8 +1557,33 @@ impl Render for PrView {
             .on_action(cx.listener(Self::on_go_to_definition))
             .on_action(cx.listener(Self::on_find_references))
             .on_action(cx.listener(Self::close_popup))
+            .on_action(cx.listener(Self::toggle_agent))
+            .on_action(cx.listener(|this, _: &AskAgent, window, cx| this.ask_agent(false, window, cx)))
+            .on_action(cx.listener(|this, _: &ExplainAgent, window, cx| this.ask_agent(true, window, cx)))
+            .on_action(cx.listener(|this, _: &AddComment, window, cx| this.add_comment_at_cursor(window, cx)))
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
+                if let Some((y0, h0)) = this.splitter_drag {
+                    if ev.pressed_button != Some(MouseButton::Left) {
+                        this.splitter_drag = None;
+                        return;
+                    }
+                    let max = f32::from(window.viewport_size().height) - 200.;
+                    this.agent_height = (h0 + f32::from(y0 - ev.position.y)).clamp(120., max.max(120.));
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.splitter_drag = None))
             .child(self.render_header(cx))
-            .child(div().flex_1().min_h_0().flex().child(self.render_sidebar(cx)).child(self.render_main(cx)))
+            .child({
+                let main = self.render_main(cx);
+                let dock = self.render_agent_dock(cx);
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(self.render_sidebar(cx))
+                    .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_1().min_h_0().flex().child(main)).children(dock))
+            })
             .children(self.render_hover(cx))
             .children(self.render_peek(cx))
     }

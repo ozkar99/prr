@@ -57,7 +57,7 @@ single-instance plugin (own unix-socket handoff).
       on cli/cli#14925 (composer opened/typed/cancelled; nothing posted).
 - [x] **CP4** reviews: inline threads, composer, gutter "+", reply/resolve/delete,
       outdated threads, sidebar thread list, conversation view, finish-review panel.
-- [ ] **CP5** agent panel: terminal, MCP server + agent launch, ⌘L/⌘⇧L + context menu.
+- [x] **CP5** agent panel: terminal, MCP server + agent launch, ⌘L/⌘⇧L + context menu.
 - [ ] **CP7** Settings screen (user request): agent command (replaces hand-editing
       ~/.review-tool-agent-command), editor and UI font sizes, and other preferences;
       stored in ~/Library/Application Support/review-tool/settings.json.
