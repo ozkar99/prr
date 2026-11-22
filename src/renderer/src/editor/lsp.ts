@@ -70,7 +70,11 @@ async function clangdFallbackFlags(root: string): Promise<string[]> {
 }
 
 export async function startLanguageClient(lang: LspLanguage, root: string): Promise<LanguageClientHandle> {
-  const initializationOptions = lang === 'cpp' ? { fallbackFlags: await clangdFallbackFlags(root) } : undefined
+  const initializationOptions =
+    lang === 'cpp'
+      ? { fallbackFlags: await clangdFallbackFlags(root) }
+      : // Off by default in gopls; VS Code's Go extension turns it on. Colors types, packages, etc.
+        { semanticTokens: true }
   const id = await window.api.startLsp(lang, root)
   let client: MonacoLanguageClient | undefined
   let disposed = false

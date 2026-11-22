@@ -57,3 +57,4 @@ export function initServices(): Promise<void> {
   })()
   return started
 }
+
