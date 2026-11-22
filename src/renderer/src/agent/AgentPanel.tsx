@@ -36,6 +36,16 @@ const theme = {
   brightWhite: '#e5e5e5'
 }
 
+/** Whether the bottom of the terminal shows a yes/no or trust prompt. */
+function showsConfirmationPrompt(term: Terminal): boolean {
+  const buffer = term.buffer.active
+  const lines: string[] = []
+  for (let y = Math.max(0, buffer.baseY + buffer.cursorY - 20); y <= buffer.baseY + term.rows - 1; y++) {
+    lines.push(buffer.getLine(y)?.translateToString(true) ?? '')
+  }
+  return /trust (this|the files in this) folder|enter to confirm|do you want to proceed|\(y\/n\)|\[y\/n\]/i.test(lines.join('\n'))
+}
+
 function selectionRef(sel: EditorSelection): string {
   const lines = sel.startLine === sel.endLine ? `line ${sel.startLine}` : `lines ${sel.startLine}-${sel.endLine}`
   const side = sel.side === 'old' ? ' (old version, before the PR)' : ''
@@ -105,6 +115,12 @@ export const AgentPanel = forwardRef<AgentPanelHandle, { pr: PRDetails; checkout
           const startedAt = performance.now()
           const wait = setInterval(() => {
             const now = performance.now()
+            // Never type into a confirmation prompt (e.g. Claude Code's "trust this folder?"):
+            // wait until the user has answered it, or give up after 5 minutes.
+            if (showsConfirmationPrompt(term)) {
+              if (now - startedAt > 5 * 60_000) clearInterval(wait)
+              return
+            }
             const settled = lastOutputAt.current > 0 && now - lastOutputAt.current > 700 && now - startedAt > 1500
             if (settled || now - startedAt > 10000) {
               clearInterval(wait)

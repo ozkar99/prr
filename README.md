@@ -5,6 +5,11 @@ It checks out the PR, runs the language's own server against it (gopls, clangd, 
 starpls), and shows the diff in VS Code's editor, so you get hover types, go-to-definition,
 peek and find-references while you review. Comments, replies and reviews go straight to GitHub.
 
+![Review Tool reviewing a Go PR: side-by-side diff with hover type info from gopls, and Claude Code answering a question about the selected lines in the bottom panel](docs/screenshots/review-tool.png)
+
+*Reviewing a Go PR: the diff with hover docs from gopls (top), and Claude Code explaining the
+selected lines (bottom, ⌘L).*
+
 **You don't need VS Code installed.** The app bundles VS Code's editor code (editor, hovers,
 peek views, Markdown renderer) as npm packages via
 [`@codingame/monaco-vscode-api`](https://github.com/CodinGame/monaco-vscode-api). The app is built with
