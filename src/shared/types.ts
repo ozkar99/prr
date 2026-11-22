@@ -1,3 +1,12 @@
+export type PRRef = { owner: string; repo: string; number: number }
+
+/** Parses a PR URL or owner/repo#123. */
+export function parsePRRef(input: string): PRRef | undefined {
+  const s = input.trim()
+  const m = s.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/) ?? s.match(/^([\w.-]+)\/([\w.-]+)#(\d+)$/)
+  return m ? { owner: m[1], repo: m[2], number: Number(m[3]) } : undefined
+}
+
 export type PRSummary = {
   owner: string
   repo: string
@@ -126,6 +135,10 @@ export type Api = {
   setResolved(threadId: string, resolved: boolean): Promise<void>
   submitReview(state: ReviewState, headSha: string, event: ReviewEvent, body: string): Promise<void>
   openExternal(url: string): Promise<void>
+  /** A PR the app was launched with (`review-tool <pr>`), consumed once. */
+  takeLaunchPR(): Promise<PRRef | null>
+  /** PRs sent by later `review-tool <pr>` calls while the app is running. */
+  onOpenPR(cb: (ref: PRRef) => void): () => void
   onProgress(cb: (message: string) => void): () => void
   onLspExit(cb: (info: { id: number; lang: LspLanguage; code: number | null; stderrTail: string }) => void): () => void
 }

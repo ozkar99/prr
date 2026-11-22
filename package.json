@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
+  "bin": {
+    "review-tool": "bin/review-tool.mjs"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

@@ -19,6 +19,12 @@ const api: Api = {
   setResolved: (id, resolved) => ipcRenderer.invoke('gh:setResolved', id, resolved),
   submitReview: (state, sha, event, body) => ipcRenderer.invoke('gh:submitReview', state, sha, event, body),
   openExternal: (url) => ipcRenderer.invoke('shell:open', url),
+  takeLaunchPR: () => ipcRenderer.invoke('app:takeLaunchPR'),
+  onOpenPR: (cb) => {
+    const listener = (_e: unknown, ref: Parameters<typeof cb>[0]) => cb(ref)
+    ipcRenderer.on('app:openPR', listener)
+    return () => ipcRenderer.off('app:openPR', listener)
+  },
   onProgress: (cb) => {
     const listener = (_e: unknown, msg: string) => cb(msg)
     ipcRenderer.on('progress', listener)

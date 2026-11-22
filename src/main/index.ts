@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
-import type { LspLanguage, NewThread, PRDetails, ReviewEvent, ReviewState } from '../shared/types'
+import { parsePRRef, type LspLanguage, type NewThread, type PRDetails, type PRRef, type ReviewEvent, type ReviewState } from '../shared/types'
 import { augmentPath } from './exec'
 import { fsRead, fsReaddir, fsStat } from './fsaccess'
 import { checkout, readAtCommit } from './git'
@@ -8,6 +8,32 @@ import { addPRComment, addThread, deleteComment, getPR, reply, reviewQueue, revi
 import { startServer, stopAllServers, stopServer } from './lsp'
 
 augmentPath()
+
+/** `review-tool <pr>` launches the app with `--open-pr=<url>`. */
+function prFromArgv(argv: string[]): PRRef | undefined {
+  const arg = argv.find((a) => a.startsWith('--open-pr='))
+  return arg ? parsePRRef(arg.slice('--open-pr='.length)) : undefined
+}
+
+// One window for all PRs: a second launch hands its PR to the running app and exits.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+  process.exit(0)
+}
+
+let launchPR = prFromArgv(process.argv)
+
+app.on('second-instance', (_e, argv) => {
+  const win = BrowserWindow.getAllWindows()[0] ?? createWindow()
+  if (win.isMinimized()) win.restore()
+  win.show()
+  app.focus({ steal: true })
+  const ref = prFromArgv(argv)
+  if (!ref) return
+  // If the page is still loading, it will pick this up via takeLaunchPR.
+  if (win.webContents.isLoading()) launchPR = ref
+  else win.webContents.send('app:openPR', ref)
+})
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -49,6 +75,11 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  ipcMain.handle('app:takeLaunchPR', () => {
+    const ref = launchPR ?? null
+    launchPR = undefined
+    return ref
+  })
   ipcMain.handle('gh:queue', () => reviewQueue())
   ipcMain.handle('gh:pr', (_e, owner: string, repo: string, number: number) => getPR(owner, repo, number))
   ipcMain.handle('gh:reviewState', (_e, owner: string, repo: string, number: number) => reviewState(owner, repo, number))

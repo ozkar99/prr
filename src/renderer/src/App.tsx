@@ -1,16 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { Checkout, PRDetails, PRSummary } from '../../shared/types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { parsePRRef, type Checkout, type PRDetails, type PRRef, type PRSummary } from '../../shared/types'
 import { PRView } from './PRView'
 
 type Opened = { pr: PRDetails; checkout: Checkout }
-
-function parsePRRef(input: string): { owner: string; repo: string; number: number } | undefined {
-  const s = input.trim()
-  const url = s.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
-  const short = s.match(/^([\w.-]+)\/([\w.-]+)#(\d+)$/)
-  const m = url ?? short
-  return m ? { owner: m[1], repo: m[2], number: Number(m[3]) } : undefined
-}
 
 export function App() {
   const [queue, setQueue] = useState<PRSummary[] | undefined>()
@@ -29,6 +21,8 @@ export function App() {
   useEffect(() => window.api.onProgress(setBusy), [])
 
   const open = async (owner: string, repo: string, number: number) => {
+    // Back to the home screen, which shows loading progress.
+    setOpened(undefined)
     setError(undefined)
     setBusy(`Loading ${owner}/${repo}#${number}…`)
     try {
@@ -41,6 +35,14 @@ export function App() {
       setBusy(undefined)
     }
   }
+
+  // PRs from the `review-tool` command: the one we launched with, then any sent later.
+  const openRef = useRef<(ref: PRRef) => void>(undefined)
+  openRef.current = (ref) => void open(ref.owner, ref.repo, ref.number)
+  useEffect(() => {
+    void window.api.takeLaunchPR().then((ref) => ref && openRef.current?.(ref))
+    return window.api.onOpenPR((ref) => openRef.current?.(ref))
+  }, [])
 
   if (opened) {
     return <PRView key={`${opened.pr.owner}/${opened.pr.repo}#${opened.pr.number}`} {...opened} onClose={() => setOpened(undefined)} />
