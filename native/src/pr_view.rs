@@ -6,17 +6,24 @@ use crate::theme::{self, hsla};
 use crate::ui;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use crate::diffview::{Diff, DiffChangeIndicator, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState, TokenHit};
+use crate::diffview::{CodeSelection, Diff, DiffChangeIndicator, DiffEvent, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState, TokenHit};
+use crate::backend::mcp;
 use crate::lsp::{self, LspClient};
+use serde_json::{Value, json};
 use gpui_component::text::TextView;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-actions!(review_tool, [GoBack, GoToDefinition]);
+actions!(review_tool, [GoBack, GoToDefinition, FindReferences, ClosePopup]);
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("ctrl--", GoBack, None), KeyBinding::new("f12", GoToDefinition, None)]);
+    cx.bind_keys([
+        KeyBinding::new("ctrl--", GoBack, None),
+        KeyBinding::new("f12", GoToDefinition, None),
+        KeyBinding::new("shift-f12", FindReferences, None),
+        KeyBinding::new("escape", ClosePopup, Some("PrView")),
+    ]);
 }
 
 pub enum PrViewEvent {
@@ -45,6 +52,23 @@ enum LspState {
     Failed(String),
 }
 
+/// A list of locations to pick from (several definitions, or references),
+/// like VS Code's peek.
+struct Peek {
+    point: Point<Pixels>,
+    title: SharedString,
+    items: Vec<PeekItem>,
+}
+
+struct PeekItem {
+    abs: String,
+    /// Path shown (relative to the checkout when inside it).
+    label: String,
+    /// 1-based.
+    line: usize,
+    text: String,
+}
+
 struct Hover {
     point: Point<Pixels>,
     markdown: SharedString,
@@ -71,6 +95,7 @@ pub struct PrView {
     current_line: Option<(DiffSide, usize)>,
     lsp: HashMap<&'static str, LspState>,
     hover: Option<Hover>,
+    peek: Option<Peek>,
     /// Identifies the latest hover request; older ones are dropped.
     hover_seq: usize,
     hover_over_popup: bool,
@@ -79,6 +104,9 @@ pub struct PrView {
     /// Source lines of files used for LSP column conversion, by absolute path.
     file_lines: HashMap<String, Arc<Vec<String>>>,
     focus: FocusHandle,
+    _diff_subscription: Option<Subscription>,
+    /// Debounces selection reports to the agent context.
+    selection_seq: usize,
 }
 
 impl EventEmitter<PrViewEvent> for PrView {}
@@ -107,12 +135,31 @@ impl PrView {
             current_line: None,
             lsp: HashMap::new(),
             hover: None,
+            peek: None,
             hover_seq: 0,
             hover_over_popup: false,
             last_token: None,
             file_lines: HashMap::new(),
             focus: cx.focus_handle(),
+            _diff_subscription: None,
+            selection_seq: 0,
         };
+        // The agent sees the PR and the selection through the app's MCP tools.
+        let pr = &view.pr;
+        mcp::set_review(json!({
+            "root": view.checkout.root,
+            "mergeBase": view.checkout.merge_base,
+            "pr": {
+                "repo": format!("{}/{}", pr.owner, pr.repo),
+                "number": pr.number,
+                "title": pr.title,
+                "url": pr.url,
+                "author": pr.author,
+                "baseBranch": pr.base_ref,
+                "description": pr.body,
+                "files": pr.files.iter().map(|f| json!({ "path": f.path, "status": f.status, "additions": f.additions, "deletions": f.deletions })).collect::<Vec<_>>(),
+            }
+        }));
         view.start_language_servers(cx);
         if let Some(ix) = first {
             view.show(Shown::File(ix), None, false, cx);
@@ -193,6 +240,13 @@ impl PrView {
                             }
                             state
                         });
+                        this._diff_subscription = Some(cx.subscribe(&state, |this, state, event: &DiffEvent, cx| {
+                            if matches!(event, DiffEvent::TextSelectionChanged | DiffEvent::SelectionChanged(_) | DiffEvent::SelectionEnded(_)) {
+                                if let Some(selection) = state.read(cx).text_selection(cx) {
+                                    this.report_selection(selection, false, cx);
+                                }
+                            }
+                        }));
                         FileView::Diff(state)
                     }
                     Ok(_) => FileView::Message("No textual changes to show for this file.".into()),
@@ -252,6 +306,56 @@ impl PrView {
             })
             .detach();
         }
+    }
+
+    /// Tells the agent what the reviewer is looking at (web: EditorHost.watchSelection).
+    fn report_selection(&mut self, sel: CodeSelection, cursor_only: bool, cx: &mut Context<Self>) {
+        let shown = self.shown.clone();
+        let file = match &shown {
+            Some(Shown::File(ix)) => self.pr.files.get(*ix).cloned(),
+            _ => None,
+        };
+        let path = match (&shown, &file) {
+            // The left side shows the file as it was; name it by its old path.
+            (Some(Shown::File(_)), Some(f)) if sel.side == DiffSide::Original => f.previous_path.clone().unwrap_or(f.path.clone()),
+            (Some(Shown::File(_)), Some(f)) => f.path.clone(),
+            _ => self.relative(&sel.path).unwrap_or(sel.path.to_string()),
+        };
+        let changed = self.pr.files.iter().any(|f| f.path == path);
+        let mut text = sel.text;
+        if text.len() > 20000 {
+            let mut cut = 20000;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            text.truncate(cut);
+            text.push_str("\n… (truncated)");
+        }
+        let value = json!({
+            "path": path,
+            "side": if sel.side == DiffSide::Original { "old" } else { "new" },
+            "changedInPR": changed,
+            "startLine": sel.start_line,
+            "endLine": sel.end_line,
+            "cursorOnly": cursor_only,
+            "text": text,
+        });
+        self.selection_seq += 1;
+        let seq = self.selection_seq;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            if this.read_with(cx, |this, _| this.selection_seq == seq).unwrap_or(false) {
+                mcp::set_selection(value);
+            }
+        })
+        .detach();
+    }
+
+    /// Leaving the PR: stop its servers and clear the agent's context.
+    pub fn close(&mut self) {
+        self.selection_seq += 1;
+        mcp::set_review(Value::Null);
+        self.stop_language_servers();
     }
 
     pub fn stop_language_servers(&mut self) {
@@ -340,12 +444,57 @@ impl PrView {
         let Some((abs, language, line, character, client)) = self.resolve(&hit) else { return };
         self.hover = None;
         let fut = backend::task(async move { client.definition(&abs, language, line, character).await });
+        let point = hit.point;
         cx.spawn(async move |this, cx| {
             let Ok(locations) = fut.await else { return };
-            let Some(loc) = locations.into_iter().next() else { return };
-            this.update(cx, |this, cx| this.open_location(&loc.path, loc.line as usize + 1, cx)).ok();
+            this.update(cx, |this, cx| match locations.len() {
+                0 => {}
+                1 => this.open_location(&locations[0].path, locations[0].line as usize + 1, cx),
+                n => this.show_peek(point, format!("{n} definitions"), locations, cx),
+            })
+            .ok();
         })
         .detach();
+    }
+
+    fn find_references(&mut self, hit: TokenHit, cx: &mut Context<Self>) {
+        let Some((abs, language, line, character, client)) = self.resolve(&hit) else { return };
+        self.hover = None;
+        let fut = backend::task(async move { client.references(&abs, language, line, character).await });
+        let point = hit.point;
+        cx.spawn(async move |this, cx| {
+            let Ok(locations) = fut.await else { return };
+            this.update(cx, |this, cx| {
+                let n = locations.len();
+                this.show_peek(point, format!("{n} reference{}", if n == 1 { "" } else { "s" }), locations, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn show_peek(&mut self, point: Point<Pixels>, title: String, locations: Vec<lsp::Location>, cx: &mut Context<Self>) {
+        let items = locations
+            .into_iter()
+            .map(|loc| {
+                let text = self.lines_of(&loc.path).and_then(|l| l.get(loc.line as usize).cloned()).unwrap_or_default();
+                PeekItem { label: self.relative(&loc.path).unwrap_or(loc.path.clone()), abs: loc.path, line: loc.line as usize + 1, text: text.trim().to_string() }
+            })
+            .collect();
+        self.peek = Some(Peek { point, title: title.into(), items });
+        cx.notify();
+    }
+
+    fn on_find_references(&mut self, _: &FindReferences, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(hit) = self.last_token.clone() {
+            self.find_references(hit, cx);
+        }
+    }
+
+    fn close_popup(&mut self, _: &ClosePopup, _: &mut Window, cx: &mut Context<Self>) {
+        self.peek = None;
+        self.hover = None;
+        cx.notify();
     }
 
     /// Opens a file position: a changed file opens as its diff, anything else as a plain file.
@@ -542,6 +691,15 @@ impl PrView {
                                 click_view
                                     .update(cx, |this, cx| {
                                         this.last_token = Some(hit.clone());
+                                        // A click puts the cursor on a line: report it (cursor only).
+                                        let (side, line) = (hit.position.side(), hit.position.line());
+                                        if let FileView::Diff(state) = &this.file_view
+                                            && let Some(text) = state.read(cx).line_text(side, line)
+                                            && state.read(cx).text_selection(cx).is_none()
+                                        {
+                                            let sel = CodeSelection { path: hit.position.path().clone(), side, start_line: line, end_line: line, text };
+                                            this.report_selection(sel, true, cx);
+                                        }
                                         if cmd {
                                             this.go_to_definition(hit, cx);
                                         }
@@ -553,6 +711,88 @@ impl PrView {
                 FileView::Loading => div().flex_1(),
                 FileView::Message(m) => div().flex_1().flex().items_center().justify_center().child(ui::muted(m.clone())),
             })
+    }
+
+    /// VS Code-style peek list: file, line and the line's code; click to open.
+    fn render_peek(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let peek = self.peek.as_ref()?;
+        let at = point(peek.point.x, peek.point.y + px(12.));
+        Some(deferred(
+            anchored().position(at).snap_to_window_with_margin(px(8.)).child(
+                div()
+                    .id("peek")
+                    .occlude()
+                    .w(px(640.))
+                    .bg(hsla(0x1f1f1f))
+                    .border_1()
+                    .border_color(hsla(theme::ACCENT))
+                    .rounded(px(3.))
+                    .shadow_lg()
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.peek = None;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .px(px(10.))
+                            .py(px(4.))
+                            .bg(hsla(0x252526))
+                            .border_b_1()
+                            .border_color(hsla(theme::BORDER))
+                            .text_size(theme::TEXT_SMALL)
+                            .child(div().flex_1().child(peek.title.clone()))
+                            .child(
+                                div()
+                                    .id("peek-close")
+                                    .cursor_pointer()
+                                    .text_color(hsla(theme::MUTED))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.peek = None;
+                                        cx.notify();
+                                    }))
+                                    .child("✕"),
+                            ),
+                    )
+                    .child(
+                        div().id("peek-list").max_h(px(320.)).overflow_y_scroll().py(px(2.)).children(peek.items.iter().enumerate().map(|(i, item)| {
+                            let (abs, line) = (item.abs.clone(), item.line);
+                            div()
+                                .id(("peek-item", i))
+                                .flex()
+                                .gap(px(10.))
+                                .px(px(10.))
+                                .py(px(2.))
+                                .cursor_pointer()
+                                .hover(|el| el.bg(hsla(theme::HOVER)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.peek = None;
+                                    this.open_location(&abs, line, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .max_w(px(260.))
+                                        .truncate()
+                                        .text_size(theme::TEXT_SMALL)
+                                        .text_color(hsla(theme::FG))
+                                        .child(format!("{}:{}", item.label, item.line)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_family(theme::MONO_FONT)
+                                        .text_size(theme::TEXT_SMALL)
+                                        .text_color(hsla(theme::MUTED))
+                                        .child(item.text.clone()),
+                                )
+                        })),
+                    ),
+            ),
+        ))
     }
 
     /// VS Code-style hover widget with the server's Markdown.
@@ -628,9 +868,12 @@ impl Render for PrView {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::on_go_to_definition))
+            .on_action(cx.listener(Self::on_find_references))
+            .on_action(cx.listener(Self::close_popup))
             .child(self.render_header(cx))
             .child(div().flex_1().min_h_0().flex().child(self.render_sidebar(cx)).child(self.render_main(cx)))
             .children(self.render_hover(cx))
+            .children(self.render_peek(cx))
     }
 }
 

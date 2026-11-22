@@ -329,6 +329,18 @@ impl LspClient {
         Ok(locations(&result))
     }
 
+    /// All references, including the declaration.
+    pub async fn references(&self, path: &str, language: &str, line: u32, character: u32) -> Result<Vec<Location>, String> {
+        self.ensure_open(path, language).await?;
+        let result = self
+            .request(
+                "textDocument/references",
+                json!({ "textDocument": { "uri": file_uri(path) }, "position": { "line": line, "character": character }, "context": { "includeDeclaration": true } }),
+            )
+            .await?;
+        Ok(locations(&result))
+    }
+
     pub async fn stop(&self) {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), self.request("shutdown", Value::Null)).await;
         let _ = self.notify("exit", Value::Null).await;
@@ -403,6 +415,8 @@ mod tests {
         assert!(hover.contains("Add sums two ints."), "{hover}");
         let defs = client.definition(&path, "go", 5, 9).await.unwrap();
         assert_eq!((defs[0].path.as_str(), defs[0].line), (path.as_str(), 3));
+        let refs = client.references(&path, "go", 5, 9).await.unwrap();
+        assert_eq!(refs.len(), 2, "{refs:?}");
         client.stop().await;
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -92,6 +92,20 @@ pub enum DiffEvent {
     /// The user resolved a merge conflict, or undid its resolution; read it
     /// with [`DiffState::conflict_resolution`].
     ConflictResolved(SharedString, usize),
+    /// The text selection inside the code changed (added for the review app's
+    /// agent context; read it with [`DiffState::text_selection`]).
+    TextSelectionChanged,
+}
+
+/// A selection in one side of one file (added for the review app).
+#[derive(Clone, Debug)]
+pub struct CodeSelection {
+    pub path: SharedString,
+    pub side: DiffSide,
+    /// 1-based, inclusive.
+    pub start_line: usize,
+    pub end_line: usize,
+    pub text: String,
 }
 
 /// Inputs that determine row heights and content width.
@@ -312,6 +326,7 @@ impl DiffState {
         let _selection_subscription = selection.subscribe(
             move |event, cx| {
                 let _ = weak.update(cx, |state, cx| {
+                    cx.emit(DiffEvent::TextSelectionChanged);
                     if !state.selection.has_local_selection(cx) {
                         match event {
                             TextSelectionEvent::SelectionChanged(Some(_)) => {
@@ -818,6 +833,43 @@ impl DiffState {
         self.selection.set_local_selection(range.is_some(), cx);
         self.selected_lines = range;
         cx.notify();
+    }
+
+    /// One source line's text (1-based) on a side of the first file.
+    pub fn line_text(&self, side: DiffSide, line: usize) -> Option<String> {
+        let document = self.files.first()?;
+        let source = document.lines(side).iter().find(|l| l.line_number() == line)?.source();
+        Some(document.source(side).get(source)?.trim_end_matches(['\n', '\r']).to_string())
+    }
+
+    /// The selected text as a range of source lines on one side: a text
+    /// selection in the code, or else whole lines picked from the gutter.
+    pub fn text_selection(&self, cx: &App) -> Option<CodeSelection> {
+        if let Some((file, side, range)) = super::selection::selected_source_range(&self.selection, cx) {
+            let document = self.files.get(file)?;
+            let lines = document.lines(side);
+            let line_at = |offset: usize| {
+                let ix = lines.partition_point(|line| line.source().end <= offset).min(lines.len().saturating_sub(1));
+                lines.get(ix).map(|line| line.line_number())
+            };
+            // A selection ending at the start of a line doesn't include that line.
+            let end = range.end.saturating_sub(1).max(range.start);
+            return Some(CodeSelection {
+                path: document.path().clone(),
+                side,
+                start_line: line_at(range.start)?,
+                end_line: line_at(end)?,
+                text: document.source(side).get(range)?.to_string(),
+            });
+        }
+        let lines = self.selected_lines()?;
+        (lines.side() == lines.end_side()).then(|| CodeSelection {
+            path: lines.path().clone(),
+            side: lines.side(),
+            start_line: lines.start().min(lines.end()),
+            end_line: lines.start().max(lines.end()),
+            text: self.selected_text(cx),
+        })
     }
 
     /// Returns selected source without gutters, diff markers or annotation content.

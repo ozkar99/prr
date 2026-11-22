@@ -48,8 +48,10 @@ single-instance plugin (own unix-socket handoff).
       Done: src/lsp.rs (JSON-RPC client, gopls/clangd/pyright/starpls/bash-ls, hover +
       definition; tested against gopls), token hover/click in the diff, hover popup
       (Markdown), ⌘-click / F12 go-to-definition, plain-file view, back stack (Ctrl+- and ←),
-      server status chips. Left: peek definition, references, selection tracking for the
-      agent, manually checking hover placement with a real pointer.
+      server status chips (hover/⌘-click/back confirmed by hand). Also: peek list for several
+      definitions and Shift+F12 references (Esc closes), selection + cursor line reported to
+      the agent's MCP context (debounced 120 ms), PR context set on open, cleared on close.
+      Left: right-click menu (with CP5's agent items).
 - [ ] **CP4** reviews: inline threads, composer, gutter "+", reply/resolve/delete,
       outdated threads, sidebar thread list, conversation view, finish-review panel.
 - [ ] **CP5** agent panel: terminal, MCP server + agent launch, ⌘L/⌘⇧L + context menu.
