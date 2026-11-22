@@ -6,7 +6,7 @@ use crate::theme::{self, hsla};
 use crate::ui;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::diff::{Diff, DiffChangeIndicator, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState};
+use crate::diffview::{Diff, DiffChangeIndicator, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState};
 
 pub enum PrViewEvent {
     /// "← Pull requests": back to the home screen.

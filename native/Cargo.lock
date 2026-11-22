@@ -5027,6 +5027,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "futures",
+ "gpui-base",
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",
@@ -5035,6 +5036,8 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "similar",
+ "smallvec",
  "tokio",
  "tree-sitter",
  "tree-sitter-bash",
@@ -5043,6 +5046,8 @@ dependencies = [
  "tree-sitter-go",
  "tree-sitter-highlight",
  "tree-sitter-python",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

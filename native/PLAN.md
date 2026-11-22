@@ -36,8 +36,15 @@ single-instance plugin (own unix-socket handoff).
       inline word diff, reveal first change. Left: hatched fillers, exact VS Code diff
       colors (the diff hardcodes 12%/30% opacities of theme success/danger), plain file
       view for go-to-definition targets (CP3).
+      The diff is vendored in src/diffview (from gpui-component 0.10.0, Apache-2.0):
+      actions renamed to `review_diff`, key context `ReviewDiff`, English strings via a
+      local `t!` (strings.rs), our highlighter/language detection instead of GPUI Kit's
+      private ones. Crate is edition 2024 (the vendored code uses let chains).
 - [ ] **CP3** LSP: hover popup (markdown), go-to-definition (⌘-click/F12) + back stack,
-      peek, selection tracking.
+      peek, selection tracking. Plan: add character-level hover/click callbacks to the
+      vendored diff (it already maps mouse → text offsets for selection, see selection.rs),
+      an in-process LSP client (reuse framing from backend; lsp-types), and a single-column
+      mode of the diff for plain files.
 - [ ] **CP4** reviews: inline threads, composer, gutter "+", reply/resolve/delete,
       outdated threads, sidebar thread list, conversation view, finish-review panel.
 - [ ] **CP5** agent panel: terminal, MCP server + agent launch, ⌘L/⌘⇧L + context menu.

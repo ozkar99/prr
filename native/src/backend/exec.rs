@@ -23,7 +23,8 @@ pub fn augment_path() {
             parts.push(p);
         }
     }
-    std::env::set_var("PATH", parts.join(":"));
+    // SAFETY: called once at startup, before any other threads exist.
+    unsafe { std::env::set_var("PATH", parts.join(":")) };
 }
 
 /// Absolute path of an executable on PATH.
