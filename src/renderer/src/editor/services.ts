@@ -1,5 +1,4 @@
-import '@codingame/monaco-vscode-go-default-extension'
-import '@codingame/monaco-vscode-cpp-default-extension'
+import './languages'
 import type { OpenEditor } from '@codingame/monaco-vscode-editor-service-override'
 import { registerFileSystemOverlay } from '@codingame/monaco-vscode-files-service-override'
 import { MonacoVscodeApiWrapper } from 'monaco-languageclient/vscodeApiWrapper'

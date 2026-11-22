@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Checkout, LspLanguage, PRDetails, PRFile, ReviewThread } from '../../shared/types'
 import { EditorHost, type Location } from './editor/EditorHost'
-import { languagesFor, startLanguageClient, type LanguageClientHandle } from './editor/lsp'
+import { languagesFor, serverNames, startLanguageClient, type LanguageClientHandle } from './editor/lsp'
 import { CommentController } from './review/CommentController'
 import { ReviewPanel } from './review/ReviewPanel'
 import { Thread } from './review/ThreadZone'
@@ -150,7 +150,7 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
             className={`chip ${typeof state === 'object' ? 'chip-error' : state}`}
             title={typeof state === 'object' ? state.failed : undefined}
           >
-            {lang === 'go' ? 'gopls' : 'clangd'}: {typeof state === 'object' ? 'failed' : state}
+            {serverNames[lang as LspLanguage]}: {typeof state === 'object' ? (state.failed.includes('not installed') ? 'not installed' : 'failed') : state}
           </span>
         ))}
         <button className="link" onClick={() => void window.api.openExternal(pr.url)}>

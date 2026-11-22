@@ -8,8 +8,14 @@ const selectors: Record<LspLanguage, { scheme: string; language: string }[]> = {
   cpp: [
     { scheme: 'file', language: 'cpp' },
     { scheme: 'file', language: 'c' }
-  ]
+  ],
+  python: [{ scheme: 'file', language: 'python' }],
+  starlark: [{ scheme: 'file', language: 'starlark' }]
 }
+
+export const serverNames: Record<LspLanguage, string> = { go: 'gopls', cpp: 'clangd', python: 'pyright', starlark: 'starpls' }
+
+const STARLARK_FILES = /(^|\/)(BUILD|WORKSPACE|WORKSPACE\.bzlmod|MODULE\.bazel)$|\.(bzl|star|bazel|sky)$/
 
 // Main posts each server's MessagePort as a window message, possibly before
 // the startLsp() call that created it has resolved, so collect them by id.
@@ -42,6 +48,8 @@ export function languagesFor(paths: string[]): LspLanguage[] {
   for (const p of paths) {
     if (p.endsWith('.go')) langs.add('go')
     if (/\.(c|cc|cpp|cxx|h|hh|hpp|hxx|ipp|inl|m|mm)$/.test(p)) langs.add('cpp')
+    if (/\.pyi?$/.test(p)) langs.add('python')
+    if (STARLARK_FILES.test(p)) langs.add('starlark')
   }
   return [...langs]
 }
@@ -73,8 +81,10 @@ export async function startLanguageClient(lang: LspLanguage, root: string): Prom
   const initializationOptions =
     lang === 'cpp'
       ? { fallbackFlags: await clangdFallbackFlags(root) }
-      : // Off by default in gopls; VS Code's Go extension turns it on. Colors types, packages, etc.
-        { semanticTokens: true }
+      : lang === 'go'
+        ? // Off by default in gopls; VS Code's Go extension turns it on. Colors types, packages, etc.
+          { semanticTokens: true }
+        : undefined
   const id = await window.api.startLsp(lang, root)
   let client: MonacoLanguageClient | undefined
   let disposed = false
@@ -83,7 +93,7 @@ export async function startLanguageClient(lang: LspLanguage, root: string): Prom
     const port = await portFor(id)
     if (disposed) return
     client = new MonacoLanguageClient({
-      name: lang === 'go' ? 'gopls' : 'clangd',
+      name: serverNames[lang],
       id: `${lang}-${id}`,
       clientOptions: {
         documentSelector: selectors[lang],

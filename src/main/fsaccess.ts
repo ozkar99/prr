@@ -1,13 +1,16 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
-import { sep } from 'node:path'
+import { createRequire } from 'node:module'
+import { homedir, userInfo } from 'node:os'
+import { dirname, sep } from 'node:path'
 import type { FileStat } from '../shared/types'
 import { run } from './exec'
 import { worktreesDir } from './git'
 
 /**
  * The editor may read files from the PR worktrees plus the places
- * go-to-definition can lead to: the Go standard library and module cache, and
- * system / Homebrew C++ headers. Everything else is refused.
+ * go-to-definition can lead to: the Go standard library and module cache,
+ * system / Homebrew C++ headers, Python's stdlib and packages, pyright's
+ * stubs, and Bazel's external repositories. Everything else is refused.
  */
 let roots: string[] | undefined
 
@@ -16,9 +19,22 @@ async function allowedRoots(): Promise<string[]> {
     const goDirs = await run('go', ['env', 'GOROOT', 'GOMODCACHE'])
       .then((out) => out.split('\n').map((l) => l.trim()).filter(Boolean))
       .catch(() => [])
+    // Python: the interpreter's stdlib and site-packages (pyright jumps there), plus pyright's bundled stubs.
+    const pythonDirs = await run('python3', ['-c', 'import sys; print("\\n".join(p for p in sys.path if p))'])
+      .then((out) => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('/')))
+      .catch(() => [])
+    let pyrightDir: string[] = []
+    try {
+      pyrightDir = [dirname(createRequire(import.meta.url).resolve('pyright/package.json'))]
+    } catch {}
     const candidates = [
       worktreesDir(),
       ...goDirs,
+      ...pythonDirs,
+      ...pyrightDir,
+      // Bazel's external repositories (starpls resolves @repo//... labels there).
+      `/private/var/tmp/_bazel_${userInfo().username}`,
+      `${homedir()}/.cache/bazel`,
       '/usr/include',
       '/Library/Developer/CommandLineTools',
       '/Applications/Xcode.app/Contents/Developer',

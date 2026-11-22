@@ -1,7 +1,8 @@
 import { MessageChannelMain, type WebContents } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { createRequire } from 'node:module'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node'
 import type { LspLanguage } from '../shared/types'
 
@@ -15,7 +16,31 @@ function clangdPath(): string {
   return existsSync(brew) ? brew : 'clangd'
 }
 
+/** Absolute path of an executable on PATH, or undefined. */
+function which(cmd: string): string | undefined {
+  if (isAbsolute(cmd)) return existsSync(cmd) ? cmd : undefined
+  return (process.env.PATH ?? '')
+    .split(delimiter)
+    .map((dir) => join(dir, cmd))
+    .find((p) => existsSync(p))
+}
+
+const installHints: Record<LspLanguage, string> = {
+  go: 'go install golang.org/x/tools/gopls@latest',
+  cpp: 'xcode-select --install  (or: brew install llvm)',
+  python: 'bundled with the app; try reinstalling dependencies (npm install)',
+  starlark: 'download starpls from https://github.com/withered-magic/starpls/releases and put it on your PATH'
+}
+
 function command(lang: LspLanguage, root: string): { cmd: string; args: string[]; env: NodeJS.ProcessEnv } {
+  if (lang === 'python') {
+    // pyright ships as an npm package; run it with Electron's built-in Node.
+    const langserver = createRequire(import.meta.url).resolve('pyright/langserver.index.js')
+    return { cmd: process.execPath, args: [langserver, '--stdio'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
+  }
+  if (lang === 'starlark') {
+    return { cmd: 'starpls', args: ['server'], env: process.env }
+  }
   if (lang === 'go') {
     // GOTOOLCHAIN=local stops a PR's go.mod from making us download and run a
     // different Go toolchain.
@@ -45,7 +70,9 @@ export function startServer(
   const id = nextId++
 
   const { cmd, args, env } = command(lang, root)
-  const proc = spawn(cmd, args, { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'] })
+  const resolved = which(cmd)
+  if (!resolved) throw new Error(`not installed: ${cmd}. To install: ${installHints[lang]}`)
+  const proc = spawn(resolved, args, { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'] })
 
   let stderrTail = ''
   proc.stderr!.on('data', (chunk: Buffer) => {

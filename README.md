@@ -9,8 +9,16 @@ editor services (`@codingame/monaco-vscode-api` + `monaco-languageclient`).
 
 - `gh` logged in (`gh auth status`) — the app reuses its token
 - `git`
-- Go PRs: `go` and `gopls` (`go install golang.org/x/tools/gopls@latest`)
-- C++ PRs: `clangd` (ships with Xcode Command Line Tools; Homebrew `llvm` is preferred if installed)
+Language support (syntax highlighting always works; the server adds hover types and navigation):
+
+| Language | Files | Server | Install |
+|---|---|---|---|
+| Go | `.go` | gopls | `go install golang.org/x/tools/gopls@latest` |
+| C/C++ | `.c` `.cc` `.cpp` `.h` `.hpp` … | clangd | Xcode Command Line Tools (Homebrew `llvm` preferred if installed) |
+| Python | `.py` `.pyi` | pyright | bundled (npm dependency, runs on Electron's Node) |
+| Starlark / Bazel | `BUILD` `.bazel` `.bzl` `WORKSPACE` `MODULE.bazel` | starpls | download from [starpls releases](https://github.com/withered-magic/starpls/releases), put on `PATH` |
+
+If a server is missing, its status chip in the header says "not installed"; hover it for the install hint.
 
 ## Run
 
