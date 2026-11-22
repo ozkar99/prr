@@ -25,7 +25,7 @@ cask "review-tool" do
   # `brew trust`), so clear the download quarantine flag.
   postflight_steps do
     run "/usr/bin/xattr",
-        args:           ["-dr", "com.apple.quarantine", "#{appdir}/Review Tool.app"],
+        args:           ["-dr", "com.apple.quarantine", "{{appdir}}/Review Tool.app"],
         writable_paths: ["Review Tool.app"],
         writable_base:  :appdir
   end
