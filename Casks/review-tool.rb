@@ -13,7 +13,6 @@ cask "review-tool" do
   desc "Review GitHub pull requests with real code intelligence"
   homepage "https://github.com/ozkar99/review-tool"
 
-  depends_on macos: ">= :catalina"
   depends_on formula: "gh"   # GitHub access; the app reuses its login
   depends_on formula: "node" # runs pyright and bash-language-server (Python and shell support)
 
