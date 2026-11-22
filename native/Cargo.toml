@@ -1,0 +1,21 @@
+[package]
+name = "review-tool-native"
+version = "0.4.0"
+edition = "2021"
+description = "Review GitHub pull requests with real code intelligence (native Rust UI)"
+
+[[bin]]
+name = "review-tool"
+path = "src/main.rs"
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+# Platform layer (macOS window, Metal renderer). runtime_shaders: compile Metal shaders at
+# launch, so building doesn't need Xcode's `metal` compiler.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["runtime_shaders", "font-kit"] }
+gpui-component = "=0.10.0"
+anyhow = "1"
+
+[profile.release]
+strip = true
+lto = "thin"
