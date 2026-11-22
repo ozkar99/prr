@@ -1,0 +1,109 @@
+import { MonacoLanguageClient } from 'monaco-languageclient'
+import { BrowserMessageReader, BrowserMessageWriter, CloseAction, ErrorAction } from 'vscode-languageclient/browser'
+import * as vscode from 'vscode'
+import type { LspLanguage } from '../../../shared/types'
+
+const selectors: Record<LspLanguage, { scheme: string; language: string }[]> = {
+  go: [{ scheme: 'file', language: 'go' }],
+  cpp: [
+    { scheme: 'file', language: 'cpp' },
+    { scheme: 'file', language: 'c' }
+  ]
+}
+
+// Main posts each server's MessagePort as a window message, possibly before
+// the startLsp() call that created it has resolved, so collect them by id.
+const ports = new Map<number, MessagePort>()
+const portWaiters = new Map<number, (port: MessagePort) => void>()
+window.addEventListener('message', (e: MessageEvent) => {
+  if (e.data?.type !== 'lsp:port' || !e.ports[0]) return
+  const id = e.data.id as number
+  const waiter = portWaiters.get(id)
+  if (waiter) {
+    portWaiters.delete(id)
+    waiter(e.ports[0])
+  } else {
+    ports.set(id, e.ports[0])
+  }
+})
+
+function portFor(id: number): Promise<MessagePort> {
+  const port = ports.get(id)
+  if (port) {
+    ports.delete(id)
+    return Promise.resolve(port)
+  }
+  return new Promise((resolve) => portWaiters.set(id, resolve))
+}
+
+/** Which language servers a PR needs, based on its changed files. */
+export function languagesFor(paths: string[]): LspLanguage[] {
+  const langs = new Set<LspLanguage>()
+  for (const p of paths) {
+    if (p.endsWith('.go')) langs.add('go')
+    if (/\.(c|cc|cpp|cxx|h|hh|hpp|hxx|ipp|inl|m|mm)$/.test(p)) langs.add('cpp')
+  }
+  return [...langs]
+}
+
+export type LanguageClientHandle = {
+  /** Server id, matches the id in lsp:exit events. */
+  id: number
+  ready: Promise<void>
+  dispose(): Promise<void>
+}
+
+/**
+ * Asks main to start a server for `root`, then connects a language client to
+ * the MessagePort it sends back. Only `file://` models are sent to the server,
+ * so the base side of a diff never confuses it.
+ */
+/**
+ * Flags clangd uses for files missing from compile_commands.json (or when
+ * there is none). Guessing the usual include folders resolves most
+ * project headers without running the repo's build system.
+ */
+async function clangdFallbackFlags(root: string): Promise<string[]> {
+  const dirs = ['', 'include', 'src', 'lib', 'third_party', 'external']
+  const existing = await Promise.all(dirs.map(async (d) => ((await window.api.fsStat(`${root}/${d}`))?.type === 'directory' ? d : null)))
+  return ['-std=c++20', ...existing.filter((d): d is string => d !== null).map((d) => `-I${root}${d ? '/' + d : ''}`)]
+}
+
+export async function startLanguageClient(lang: LspLanguage, root: string): Promise<LanguageClientHandle> {
+  const initializationOptions = lang === 'cpp' ? { fallbackFlags: await clangdFallbackFlags(root) } : undefined
+  const id = await window.api.startLsp(lang, root)
+  let client: MonacoLanguageClient | undefined
+  let disposed = false
+
+  const ready = (async () => {
+    const port = await portFor(id)
+    if (disposed) return
+    client = new MonacoLanguageClient({
+      name: lang === 'go' ? 'gopls' : 'clangd',
+      id: `${lang}-${id}`,
+      clientOptions: {
+        documentSelector: selectors[lang],
+        initializationOptions,
+        workspaceFolder: { index: 0, name: 'pr', uri: vscode.Uri.file(root) },
+        errorHandler: {
+          error: () => ({ action: ErrorAction.Continue }),
+          closed: () => ({ action: CloseAction.DoNotRestart })
+        }
+      },
+      messageTransports: { reader: new BrowserMessageReader(port), writer: new BrowserMessageWriter(port) }
+    })
+    if (import.meta.env.DEV) ((window as unknown as { __lsp?: Record<string, unknown> }).__lsp ??= {})[lang] = client
+    await client.start()
+  })()
+
+  return {
+    id,
+    ready,
+    async dispose() {
+      if (disposed) return
+      disposed = true
+      await client?.dispose().catch(() => {})
+      await window.api.stopLsp(id)
+    }
+  }
+}
