@@ -23,8 +23,11 @@ cask "review-tool" do
   # The app is ad-hoc signed, not notarized, so macOS would block it as a
   # downloaded app. Installing from this tap is the trust decision (see
   # `brew trust`), so clear the download quarantine flag.
-  postflight do
-    system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/Review Tool.app"]
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args:           ["-dr", "com.apple.quarantine", "#{appdir}/Review Tool.app"],
+        writable_paths: ["Review Tool.app"],
+        writable_base:  :appdir
   end
 
   zap trash: [
