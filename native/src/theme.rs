@@ -91,6 +91,8 @@ pub fn apply(cx: &mut App) {
     c.danger = hsla(DEL);
     c.success = hsla(ADD);
     c.warning = hsla(WARN);
+    // Push the edited colors to Base (Markdown views' link color, scrollbars).
+    Theme::sync_base(cx);
 }
 
 // ---- Diff colors (VS Code Dark Modern defaults) ----

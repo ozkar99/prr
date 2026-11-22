@@ -9,6 +9,11 @@ use gpui::*;
 use crate::diffview::{CodeSelection, Diff, DiffChangeIndicator, DiffEvent, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState, TokenHit};
 use crate::backend::mcp;
 use crate::lsp::{self, LspClient};
+use crate::review::{Conversation, Review, ReviewPanel, ReviewPanelEvent, ThreadView, ThreadZone};
+use crate::diffview::{DiffAnnotation, DiffLineRange};
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::rc::Rc;
 use serde_json::{Value, json};
 use gpui_component::text::TextView;
 use std::collections::HashMap;
@@ -82,6 +87,26 @@ enum FileView {
     Message(String),
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum MainView {
+    Code,
+    Conversation,
+}
+
+type Zones = Rc<RefCell<HashMap<String, Entity<ThreadZone>>>>;
+
+fn zone_key(path: &str, side: &str, line: u64) -> String {
+    format!("{side}:{line}:{path}")
+}
+
+fn side_name(side: DiffSide) -> &'static str {
+    if side == DiffSide::Original { "LEFT" } else { "RIGHT" }
+}
+
+fn side_of(name: &str) -> DiffSide {
+    if name == "LEFT" { DiffSide::Original } else { DiffSide::Modified }
+}
+
 pub struct PrView {
     pub pr: PRDetails,
     pub checkout: Checkout,
@@ -107,6 +132,17 @@ pub struct PrView {
     _diff_subscription: Option<Subscription>,
     /// Debounces selection reports to the agent context.
     selection_seq: usize,
+    review: Entity<Review>,
+    /// Thread areas under diff lines, by zone_key (shared with the diff's annotation renderer).
+    zones: Zones,
+    view: MainView,
+    conversation: Entity<Conversation>,
+    review_panel: Option<Entity<ReviewPanel>>,
+    /// Files whose thread list in the sidebar is collapsed.
+    collapsed_files: HashSet<String>,
+    show_outdated: bool,
+    outdated_views: HashMap<String, Entity<ThreadView>>,
+    _subs: Vec<Subscription>,
 }
 
 impl EventEmitter<PrViewEvent> for PrView {}
@@ -125,6 +161,9 @@ fn status_letter(status: &str) -> (&'static str, u32) {
 impl PrView {
     pub fn new(pr: PRDetails, checkout: Checkout, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let first = pr.files.iter().position(|f| f.status != "removed").or(if pr.files.is_empty() { None } else { Some(0) });
+        let review = cx.new(|cx| Review::new(&pr, cx));
+        let review_sub = cx.observe(&review, |_, _, cx| cx.notify());
+        let conversation = cx.new(|cx| Conversation::new(review.clone(), pr.clone(), cx));
         let mut view = Self {
             pr,
             checkout,
@@ -143,6 +182,15 @@ impl PrView {
             focus: cx.focus_handle(),
             _diff_subscription: None,
             selection_seq: 0,
+            review: review.clone(),
+            zones: Rc::new(RefCell::new(HashMap::new())),
+            view: MainView::Code,
+            conversation,
+            review_panel: None,
+            collapsed_files: HashSet::new(),
+            show_outdated: false,
+            outdated_views: HashMap::new(),
+            _subs: vec![review_sub],
         };
         // The agent sees the PR and the selection through the app's MCP tools.
         let pr = &view.pr;
@@ -176,7 +224,111 @@ impl PrView {
     }
 
     pub fn select_file(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.view = MainView::Code;
         self.show(Shown::File(ix), None, true, cx);
+    }
+
+    fn open_conversation(&mut self, target: Option<String>, cx: &mut Context<Self>) {
+        self.view = MainView::Conversation;
+        self.conversation.update(cx, |c, cx| c.show(target, cx));
+        cx.notify();
+    }
+
+    fn open_thread(&mut self, file_ix: usize, thread: &ReviewThread, cx: &mut Context<Self>) {
+        self.view = MainView::Code;
+        match thread.line {
+            None => {
+                self.show_outdated = true;
+                self.show(Shown::File(file_ix), None, true, cx);
+            }
+            Some(line) => {
+                // Put the thread a few lines below the top, like revealing it in Monaco.
+                let top = (line as usize).saturating_sub(5).max(1);
+                self.show(Shown::File(file_ix), Some((side_of(&thread.side), top)), true, cx);
+            }
+        }
+    }
+
+    /// Opens a comment box under `range`'s last line (GitHub only accepts lines in the patch).
+    fn add_comment(&mut self, range: &DiffLineRange, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Shown::File(ix)) = self.shown.clone() else { return };
+        let Some(file) = self.pr.files.get(ix).cloned() else { return };
+        let side = side_name(range.side());
+        let (start, end) = (range.start().min(range.end()) as u64, range.start().max(range.end()) as u64);
+        let ok = |a: u64, b: u64| match &file.commentable {
+            None => true,
+            Some(c) => (if side == "LEFT" { &c.left } else { &c.right }).iter().any(|&(x, y)| a >= x && b <= y),
+        };
+        let (start_line, line) = if end > start && ok(start, end) { (Some(start), end) } else { (None, end) };
+        if !ok(line, line) {
+            return;
+        }
+        let key = zone_key(&file.path, side, line);
+        let zone = self.zone(&key, &file.path, side, line, cx);
+        zone.update(cx, |z, cx| z.open_composer(start_line, window, cx));
+        cx.notify();
+    }
+
+    fn zone(&mut self, key: &str, path: &str, side: &str, line: u64, cx: &mut Context<Self>) -> Entity<ThreadZone> {
+        if let Some(z) = self.zones.borrow().get(key) {
+            return z.clone();
+        }
+        let review = self.review.clone();
+        let zone = cx.new(|cx| ThreadZone::new(review, path.to_string(), side.to_string(), line, cx));
+        let sub = cx.subscribe(&zone, |_, _, _: &crate::review::ZoneEvent, cx| cx.notify());
+        self._subs.push(sub);
+        self.zones.borrow_mut().insert(key.to_string(), zone.clone());
+        zone
+    }
+
+    /// The diff's annotations: one per line with threads or an open comment box.
+    fn annotations(&mut self, cx: &mut Context<Self>) -> Vec<DiffAnnotation> {
+        let Some(Shown::File(ix)) = self.shown.clone() else { return Vec::new() };
+        let Some(path) = self.pr.files.get(ix).map(|f| f.path.clone()) else { return Vec::new() };
+        let mut lines: Vec<(&'static str, u64)> = Vec::new();
+        if let Some(state) = &self.review.read(cx).state {
+            for t in state.threads.iter().filter(|t| t.path == path) {
+                if let Some(line) = t.line {
+                    lines.push((if t.side == "LEFT" { "LEFT" } else { "RIGHT" }, line));
+                }
+            }
+        }
+        for (key, zone) in self.zones.borrow().iter() {
+            if zone.read(cx).has_composer() && key.ends_with(&format!(":{path}")) {
+                let mut parts = key.splitn(3, ':');
+                let side = if parts.next() == Some("LEFT") { "LEFT" } else { "RIGHT" };
+                if let Some(line) = parts.next().and_then(|l| l.parse().ok()) {
+                    lines.push((side, line));
+                }
+            }
+        }
+        lines.sort();
+        lines.dedup();
+        lines
+            .into_iter()
+            .map(|(side, line)| {
+                let key = zone_key(&path, side, line);
+                self.zone(&key, &path, side, line, cx);
+                DiffAnnotation::line(SharedString::from(key), DiffLinePosition::new(path.clone(), side_of(side), line as usize))
+            })
+            .collect()
+    }
+
+    fn toggle_review_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.review_panel.take().is_some() || self.review.read(cx).state.is_none() {
+            cx.notify();
+            return;
+        }
+        let panel = cx.new(|cx| ReviewPanel::new(self.review.clone(), self.pr.author.clone(), window, cx));
+        let sub = cx.subscribe(&panel, |this, _, ev: &ReviewPanelEvent, cx| match ev {
+            ReviewPanelEvent::Close => {
+                this.review_panel = None;
+                cx.notify();
+            }
+        });
+        self._subs.push(sub);
+        self.review_panel = Some(panel);
+        cx.notify();
     }
 
     /// Shows a changed file (whole-file side-by-side diff) or a plain file, at
@@ -565,70 +717,152 @@ impl PrView {
                 ui::link("open-github", "Open on GitHub").on_click(move |_, _, cx| cx.open_url(&url))
             })
             .child(ui::button("agent", "✦ Claude Code"))
-            .child(ui::primary_button("review", "Review"))
+            .child({
+                let pending = self.review.read(cx).pending_count();
+                let ready = self.review.read(cx).state.is_some();
+                let label = if pending > 0 { format!("Finish review ({pending})") } else { "Review".to_string() };
+                div()
+                    .relative()
+                    .child(
+                        ui::primary_button("review", label)
+                            .when(!ready, |el| el.opacity(0.5))
+                            .when(ready, |el| el.on_click(cx.listener(|this, _, window, cx| this.toggle_review_panel(window, cx)))),
+                    )
+                    .children(self.render_review_panel())
+            })
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let pr = &self.pr;
         let snippet = crate::markdown::snippet(&pr.body);
-        div()
-            .id("sidebar")
-            .w(theme::SIDEBAR_WIDTH)
-            .flex_shrink_0()
-            .h_full()
-            .overflow_y_scroll()
-            .bg(hsla(theme::PANEL))
-            .border_r_1()
-            .border_color(hsla(theme::BORDER))
-            .child(div().px(px(12.)).pt(px(10.)).pb(px(6.)).child(ui::section_title("Conversation")))
-            .child(
-                div()
-                    .id("conv-description")
-                    .flex()
-                    .items_baseline()
-                    .gap(px(6.))
-                    .px(px(12.))
-                    .py(px(3.))
-                    .hover(|s| s.bg(hsla(theme::HOVER)))
-                    .cursor_pointer()
-                    .child(div().w(px(16.)).text_color(hsla(theme::MUTED)).text_size(theme::TEXT_TINY).child("≡"))
-                    .child("Description")
-                    .child(div().flex_1().truncate().text_color(hsla(theme::MUTED)).child(if snippet.is_empty() { "No description".to_string() } else { snippet })),
-            )
-            .child(div().h(px(6.)).border_b_1().border_color(hsla(theme::BORDER)))
-            .child(
-                div()
-                    .px(px(12.))
-                    .pt(px(10.))
-                    .pb(px(6.))
-                    .flex()
-                    .gap(px(4.))
-                    .child(ui::section_title("Changed files"))
-                    .child(div().text_size(theme::TEXT_TINY).text_color(hsla(theme::MUTED)).child(format!("({})", pr.files.len()))),
-            )
-            .child(div().flex().flex_col().pb(px(12.)).children(pr.files.iter().enumerate().map(|(i, f)| {
-                let (letter, color) = status_letter(&f.status);
-                let (dir, name) = match f.path.rfind('/') {
-                    Some(slash) => (f.path[..=slash].to_string(), f.path[slash + 1..].to_string()),
-                    None => (String::new(), f.path.clone()),
-                };
-                let active = self.selected() == Some(i);
-                div()
-                    .id(SharedString::from(format!("file-{i}")))
-                    .flex()
-                    .items_baseline()
-                    .gap(px(6.))
-                    .px(px(12.))
-                    .py(px(3.))
-                    .whitespace_nowrap()
-                    .cursor_pointer()
-                    .when(active, |el| el.bg(hsla(theme::ACTIVE)))
-                    .when(!active, |el| el.hover(|s| s.bg(hsla(theme::HOVER))))
+        let review = self.review.read(cx);
+        let state = review.state.clone();
+        let error = review.error.clone();
+        let conv_target = self.conversation.read(cx).target.clone();
+        let in_conv = self.view == MainView::Conversation;
+        let mut threads_by_path: HashMap<String, Vec<ReviewThread>> = HashMap::new();
+        for t in state.iter().flat_map(|s| s.threads.iter()) {
+            threads_by_path.entry(t.path.clone()).or_default().push(t.clone());
+        }
+        let changed: HashSet<&str> = pr.files.iter().map(|f| f.path.as_str()).collect();
+        let orphans: Vec<ReviewThread> = state.iter().flat_map(|s| s.threads.iter()).filter(|t| !changed.contains(t.path.as_str())).cloned().collect();
+
+        let row = |id: SharedString, active: bool| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(12.))
+                .h(px(24.))
+                .whitespace_nowrap()
+                .cursor_pointer()
+                .when(active, |el| el.bg(hsla(theme::ACTIVE)))
+                .when(!active, |el| el.hover(|s| s.bg(hsla(theme::HOVER))))
+        };
+        let title = |text: &str, count: String| {
+            div()
+                .px(px(12.))
+                .pt(px(10.))
+                .pb(px(6.))
+                .flex()
+                .gap(px(4.))
+                .child(ui::section_title(text.to_string()))
+                .child(div().text_size(theme::TEXT_TINY).text_color(hsla(theme::MUTED)).child(count))
+        };
+
+        let mut conv = div().flex().flex_col().pb(px(6.)).mb(px(4.)).border_b_1().border_color(hsla(theme::BORDER)).child(
+            row("conv-description".into(), in_conv && conv_target.is_none())
+                .on_click(cx.listener(|this, _, _, cx| this.open_conversation(None, cx)))
+                .child(div().w(px(16.)).flex_shrink_0().text_center().text_color(hsla(theme::MUTED)).text_size(theme::TEXT_TINY).child("≡"))
+                .child(div().flex_shrink_0().child("Description"))
+                .child(div().flex_1().min_w_0().truncate().text_color(hsla(theme::MUTED)).child(if snippet.is_empty() { "No description".to_string() } else { snippet })),
+        );
+        for item in state.iter().flat_map(|s| s.conversation.iter()) {
+            let (icon, color) = match item.review_state.as_deref() {
+                Some("APPROVED") => ("✓", theme::ADD),
+                Some("CHANGES_REQUESTED") => ("±", theme::DEL),
+                _ => ("💬", theme::MUTED),
+            };
+            let text = crate::markdown::snippet(&item.body);
+            let text = if !text.is_empty() {
+                text
+            } else {
+                match item.review_state.as_deref() {
+                    Some("APPROVED") => "approved".into(),
+                    Some("CHANGES_REQUESTED") => "requested changes".into(),
+                    _ => String::new(),
+                }
+            };
+            let id = item.id.clone();
+            conv = conv.child(
+                row(SharedString::from(format!("conv-{}", item.id)), in_conv && conv_target.as_deref() == Some(item.id.as_str()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_conversation(Some(id.clone()), cx)))
+                    .child(div().w(px(16.)).flex_shrink_0().text_center().text_color(hsla(color)).text_size(theme::TEXT_TINY).child(icon))
+                    .child(div().flex_shrink_0().text_color(hsla(theme::MUTED)).child(item.author.clone()))
+                    .child(div().flex_1().min_w_0().truncate().child(text)),
+            );
+        }
+
+        let mut files = div().flex().flex_col().pb(px(12.));
+        for (i, f) in pr.files.iter().enumerate() {
+            let (letter, color) = status_letter(&f.status);
+            let (dir, name) = match f.path.rfind('/') {
+                Some(slash) => (f.path[..slash].to_string(), f.path[slash + 1..].to_string()),
+                None => (String::new(), f.path.clone()),
+            };
+            let mut threads = threads_by_path.get(&f.path).cloned().unwrap_or_default();
+            threads.sort_by_key(|t| t.line.unwrap_or(u64::MAX));
+            let open = threads.iter().filter(|t| !t.is_resolved && !t.is_outdated).count();
+            let expanded = !self.collapsed_files.contains(&f.path);
+            let active = !in_conv && self.selected() == Some(i);
+            let path = f.path.clone();
+            // The directory, cut from the left so its end stays visible (like the web's rtl ellipsis).
+            let stats = format!("+{} −{}", f.additions, f.deletions).chars().count() as f32 * 6.2;
+            let count = if threads.is_empty() { 0. } else { 34. };
+            let budget = 276. - 10. - 12. - 30. - name.chars().count() as f32 * 6.6 - stats - count;
+            let max_chars = (budget / 5.6).max(0.) as usize;
+            let shown_dir = if dir.is_empty() {
+                String::new()
+            } else if dir.chars().count() + 1 <= max_chars {
+                format!("/{dir}")
+            } else {
+                let tail: String = dir.chars().rev().take(max_chars.saturating_sub(3)).collect::<Vec<_>>().into_iter().rev().collect();
+                format!("...{tail}")
+            };
+            files = files.child(
+                row(SharedString::from(format!("file-{i}")), active)
+                    .h(px(37.))
                     .on_click(cx.listener(move |this, _, _, cx| this.select_file(i, cx)))
-                    .child(div().w(px(10.)).flex_shrink_0())
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("twisty-{i}")))
+                            .w(px(10.))
+                            .flex_shrink_0()
+                            .text_size(theme::TEXT_TINY)
+                            .text_color(hsla(theme::MUTED))
+                            .when(!threads.is_empty(), |el| {
+                                el.child(if expanded { "▾" } else { "▸" }).on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    if !this.collapsed_files.remove(&path) {
+                                        this.collapsed_files.insert(path.clone());
+                                    }
+                                    cx.notify();
+                                }))
+                            }),
+                    )
                     .child(div().w(px(12.)).flex_shrink_0().text_size(theme::TEXT_TINY).font_weight(FontWeight::SEMIBOLD).text_color(hsla(color)).child(letter))
                     .child(div().flex_shrink_0().child(name))
-                    .child(div().flex_1().min_w_0().truncate().text_size(theme::TEXT_TINY).text_color(hsla(theme::MUTED)).child(dir))
+                    .child(div().flex_1().min_w_0().overflow_hidden().text_size(theme::TEXT_TINY).text_color(hsla(theme::MUTED)).child(shown_dir))
+                    .when(!threads.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(theme::TEXT_TINY)
+                                .text_color(hsla(if open > 0 { theme::LINK } else { theme::MUTED }))
+                                .child(format!("💬 {}", if open > 0 { open } else { threads.len() })),
+                        )
+                    })
                     .child(
                         div()
                             .flex_shrink_0()
@@ -637,11 +871,79 @@ impl PrView {
                             .text_size(theme::TEXT_TINY)
                             .child(div().text_color(hsla(theme::ADD)).child(format!("+{}", f.additions)))
                             .child(div().text_color(hsla(theme::DEL)).child(format!("−{}", f.deletions))),
-                    )
-            })))
+                    ),
+            );
+            if expanded {
+                for t in threads {
+                    let thread = t.clone();
+                    files = files.child(self.thread_row(&t, false).on_click(cx.listener(move |this, _, _, cx| this.open_thread(i, &thread, cx))));
+                }
+            }
+        }
+
+        let mut sidebar = div()
+            .id("sidebar")
+            .w(theme::SIDEBAR_WIDTH)
+            .flex_shrink_0()
+            .h_full()
+            .overflow_y_scroll()
+            .bg(hsla(theme::PANEL))
+            .border_r_1()
+            .border_color(hsla(theme::BORDER))
+            .child(title("Conversation", format!("({})", state.as_ref().map(|s| s.conversation.len().to_string()).unwrap_or("…".into()))))
+            .child(conv)
+            .child(title("Changed files", format!("({})", pr.files.len())))
+            .children(error.map(|e| div().px(px(12.)).child(ui::error_text(format!("Couldn't load comments: {e}")))))
+            .child(files);
+        if !orphans.is_empty() {
+            sidebar = sidebar.child(title("Comments on files no longer in the diff", format!("({})", orphans.len())));
+            for t in orphans {
+                let url = t.comments.first().map(|c| c.url.clone()).unwrap_or(self.pr.url.clone());
+                sidebar = sidebar.child(self.thread_row(&t, true).on_click(move |_, _, cx| cx.open_url(&url)));
+            }
+        }
+        sidebar
     }
 
-    fn render_main(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// A thread under its file in the sidebar: where, author, first comment.
+    fn thread_row(&self, t: &ReviewThread, show_path: bool) -> Stateful<Div> {
+        let first = t.comments.first();
+        let where_ = if t.is_outdated || t.line.is_none() {
+            "outdated".to_string()
+        } else {
+            format!("L{}{}", t.line.unwrap_or(0), if t.side == "LEFT" { " (old)" } else { "" })
+        };
+        let where_ = if show_path { format!("{} {where_}", t.path.rsplit('/').next().unwrap_or("")) } else { where_ };
+        let pending = t.comments.iter().any(|c| c.pending);
+        div()
+            .id(SharedString::from(format!("thread-{}", t.id)))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .pl(px(40.))
+            .pr(px(12.))
+            .h(px(20.))
+            .whitespace_nowrap()
+            .text_size(theme::TEXT_SMALL)
+            .cursor_pointer()
+            .hover(|s| s.bg(hsla(theme::HOVER)))
+            .when(t.is_resolved || t.is_outdated, |el| el.opacity(0.55))
+            .child(div().flex_shrink_0().font_family(theme::MONO_FONT).text_size(theme::TEXT_TINY).text_color(hsla(theme::LINK)).child(where_))
+            .child(div().flex_shrink_0().text_color(hsla(theme::MUTED)).child(first.map(|c| c.author.clone()).unwrap_or_default()))
+            .child(div().flex_1().min_w_0().truncate().child(first.map(|c| crate::markdown::snippet(&c.body)).unwrap_or_default()))
+            .when(t.comments.len() > 1, |el| el.child(ui::muted(format!("+{}", t.comments.len() - 1))))
+            .when(pending, |el| el.child(crate::review::badge("Pending", theme::WARN)))
+            .when(t.is_resolved, |el| el.child(div().flex_shrink_0().text_color(hsla(theme::ADD)).child("✓")))
+    }
+
+    fn render_main(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.view == MainView::Conversation {
+            return div().flex_1().min_w_0().h_full().child(self.conversation.clone()).into_any_element();
+        }
+        let annotations = self.annotations(cx);
+        let zones = self.zones.clone();
+        let outdated = self.outdated_threads(cx);
+        let show_outdated = self.show_outdated && !outdated.is_empty();
         let (path, plain) = match &self.shown {
             Some(Shown::File(ix)) => (self.pr.files.get(*ix).map(|f| f.path.clone()).unwrap_or_default(), false),
             Some(Shown::Plain(abs)) => (self.relative(abs).unwrap_or_else(|| abs.clone()), true),
@@ -676,8 +978,34 @@ impl PrView {
                             .child("←"),
                     )
                     .child(div().font_family(theme::MONO_FONT).text_size(theme::TEXT_SMALL).truncate().child(path))
-                    .when(plain, |el| el.child(ui::chip("not changed in this PR", theme::MUTED))),
+                    .when(plain, |el| el.child(ui::muted("not changed in this PR")))
+                    .child(div().flex_1())
+                    .when(!outdated.is_empty(), |el| {
+                        let n = outdated.len();
+                        el.child(
+                            ui::link("toggle-outdated", format!("{} {n} outdated thread{}", if self.show_outdated { "Hide" } else { "Show" }, if n == 1 { "" } else { "s" }))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show_outdated = !this.show_outdated;
+                                    cx.notify();
+                                })),
+                        )
+                    }),
             )
+            .when(show_outdated, |el| {
+                el.child(
+                    div()
+                        .id("outdated-panel")
+                        .max_h(px(320.))
+                        .overflow_y_scroll()
+                        .p(px(8.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .border_b_1()
+                        .border_color(hsla(theme::BORDER))
+                        .children(outdated.clone()),
+                )
+            })
             .child(match &self.file_view {
                 FileView::Diff(state) => {
                     let (hover_view, click_view) = (weak.clone(), weak.clone());
@@ -689,6 +1017,32 @@ impl PrView {
                             .header_visible(false)
                             .hunk_separator(DiffHunkSeparator::Simple)
                             .change_indicator(DiffChangeIndicator::Signs)
+                            .annotations(annotations)
+                            .render_annotation(move |annotation, _, _| {
+                                let key = annotation.id().to_string();
+                                zones.borrow().get(&key).map(|z| z.clone().into_any_element()).unwrap_or_else(|| div().into_any_element())
+                            })
+                            .can_add_annotation({
+                                let commentable = match &self.shown {
+                                    Some(Shown::File(ix)) => self.pr.files.get(*ix).and_then(|f| f.commentable.clone()),
+                                    _ => None,
+                                };
+                                let plain = matches!(self.shown, Some(Shown::Plain(_)));
+                                move |pos| {
+                                    if plain {
+                                        return false;
+                                    }
+                                    let Some(c) = &commentable else { return true };
+                                    let line = pos.line() as u64;
+                                    (if pos.side() == DiffSide::Original { &c.left } else { &c.right }).iter().any(|&(a, b)| line >= a && line <= b)
+                                }
+                            })
+                            .on_add_annotation({
+                                let weak = weak.clone();
+                                move |range, window, cx| {
+                                    weak.update(cx, |this, cx| this.add_comment(range, window, cx)).ok();
+                                }
+                            })
                             .on_token_hover(move |hit, _, cx| {
                                 let hit = hit.cloned();
                                 hover_view.update(cx, |this, cx| this.on_token_hover(hit, cx)).ok();
@@ -718,6 +1072,26 @@ impl PrView {
                 FileView::Loading => div().flex_1(),
                 FileView::Message(m) => div().flex_1().flex().items_center().justify_center().child(ui::muted(m.clone())),
             })
+            .into_any_element()
+    }
+
+    /// Threads on the shown file with no current line (listed above the code, not inline).
+    fn outdated_threads(&mut self, cx: &mut Context<Self>) -> Vec<Entity<ThreadView>> {
+        let Some(Shown::File(ix)) = self.shown.clone() else { return Vec::new() };
+        let Some(path) = self.pr.files.get(ix).map(|f| f.path.clone()) else { return Vec::new() };
+        let threads: Vec<ReviewThread> =
+            self.review.read(cx).state.iter().flat_map(|s| s.threads.iter()).filter(|t| t.path == path && t.line.is_none()).cloned().collect();
+        let review = self.review.clone();
+        threads
+            .iter()
+            .map(|t| self.outdated_views.entry(t.id.clone()).or_insert_with(|| cx.new(|cx| ThreadView::new(review.clone(), t, cx))).clone())
+            .collect()
+    }
+
+    /// "Finish your review" popover, hanging under the Review button.
+    fn render_review_panel(&self) -> Option<impl IntoElement> {
+        let panel = self.review_panel.clone()?;
+        Some(deferred(div().absolute().top_full().right_0().mt(px(4.)).child(panel)).with_priority(1))
     }
 
     /// VS Code-style peek list: file, line and the line's code; click to open.

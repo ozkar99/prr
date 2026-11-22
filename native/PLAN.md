@@ -52,7 +52,10 @@ single-instance plugin (own unix-socket handoff).
       definitions and Shift+F12 references (Esc closes), selection + cursor line reported to
       the agent's MCP context (debounced 120 ms), PR context set on open, cleared on close.
       Left: right-click menu (with CP5's agent items).
-- [ ] **CP4** reviews: inline threads, composer, gutter "+", reply/resolve/delete,
+- CP4 notes: src/review.rs (Review store, Composer, ThreadView, ThreadZone as diff
+      annotations, Conversation, ReviewPanel), src/avatar.rs. Tested with the dev driver
+      on cli/cli#14925 (composer opened/typed/cancelled; nothing posted).
+- [x] **CP4** reviews: inline threads, composer, gutter "+", reply/resolve/delete,
       outdated threads, sidebar thread list, conversation view, finish-review panel.
 - [ ] **CP5** agent panel: terminal, MCP server + agent launch, ⌘L/⌘⇧L + context menu.
 - [ ] **CP7** Settings screen (user request): agent command (replaces hand-editing

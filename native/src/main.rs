@@ -1,6 +1,7 @@
 #![allow(dead_code)] // while the rewrite is in progress, parts of the backend aren't wired up yet
 
 mod app;
+mod avatar;
 mod backend;
 #[cfg(debug_assertions)]
 mod devdriver;
@@ -10,6 +11,7 @@ mod home;
 mod lsp;
 mod markdown;
 mod pr_view;
+mod review;
 mod theme;
 mod ui;
 

@@ -107,18 +107,34 @@ pub fn short_date(iso: &str) -> String {
     }
 }
 
-/// "2026-11-03T13:23:01Z" → "11/3/2026, 1:23:01 PM" (UTC), like `toLocaleString()`.
+/// "2026-11-03T21:23:01Z" → "11/3/2026, 1:23:01 PM" in local time, like `toLocaleString()`.
 pub fn short_datetime(iso: &str) -> String {
-    let date = short_date(iso);
-    let time = iso.get(11..19).unwrap_or("");
-    let mut t = time.split(':');
-    match (t.next().and_then(|h| h.parse::<u32>().ok()), t.next(), t.next()) {
-        (Some(h), Some(m), Some(s)) => {
-            let (h12, ampm) = if h == 0 { (12, "AM") } else if h < 12 { (h, "AM") } else if h == 12 { (12, "PM") } else { (h - 12, "PM") };
-            format!("{date}, {h12}:{m}:{s} {ampm}")
-        }
-        _ => date,
-    }
+    let num = |r: std::ops::Range<usize>| iso.get(r).and_then(|v| v.parse::<i32>().ok());
+    let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(sec)) = (num(0..4), num(5..7), num(8..10), num(11..13), num(14..16), num(17..19)) else {
+        return short_date(iso);
+    };
+    // SAFETY: plain C time conversions on stack values.
+    let local = unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        tm.tm_year = y - 1900;
+        tm.tm_mon = mo - 1;
+        tm.tm_mday = d;
+        tm.tm_hour = h;
+        tm.tm_min = mi;
+        tm.tm_sec = sec;
+        let t = libc::timegm(&mut tm);
+        let mut out: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut out);
+        out
+    };
+    let hour = local.tm_hour;
+    let (h12, ampm) = match hour {
+        0 => (12, "AM"),
+        1..=11 => (hour, "AM"),
+        12 => (12, "PM"),
+        _ => (hour - 12, "PM"),
+    };
+    format!("{}/{}/{}, {h12}:{:02}:{:02} {ampm}", local.tm_mon + 1, local.tm_mday, local.tm_year + 1900, local.tm_min, local.tm_sec)
 }
 
 /// Human-readable size: "39 MB", "1.2 GB".

@@ -257,6 +257,7 @@ pub struct Diff {
     on_line_hover: Option<HoverHandler>,
     on_token_hover: Option<TokenHoverHandler>,
     on_token_click: Option<TokenClickHandler>,
+    can_add_annotation: Option<Rc<dyn Fn(&DiffLinePosition) -> bool>>,
 }
 
 fn file_renderer<F, E>(render: F) -> FileRenderer
@@ -292,6 +293,7 @@ impl Diff {
             on_line_hover: None,
             on_token_hover: None,
             on_token_click: None,
+            can_add_annotation: None,
         }
     }
     /// Shows the original and modified line-number lanes. Default is true.
@@ -511,6 +513,14 @@ impl Diff {
         self
     }
     /// Reports the line under the pointer, or `None` when the pointer leaves it.
+    /// Limits the add button to lines this accepts (e.g. lines GitHub can comment on).
+    pub fn can_add_annotation<F>(mut self, predicate: F) -> Self
+    where
+        F: Fn(&DiffLinePosition) -> bool + 'static,
+    {
+        self.can_add_annotation = Some(Rc::new(predicate));
+        self
+    }
     /// Reports the character under the pointer as it moves over code, or `None`.
     pub fn on_token_hover<F>(mut self, handler: F) -> Self
     where
@@ -654,6 +664,7 @@ fn render_diff(
         on_line_hover: props.on_line_hover,
         on_token_hover: props.on_token_hover,
         on_token_click: props.on_token_click,
+        can_add_annotation: props.can_add_annotation,
         selection: state.selection().clone(),
         selected_lines: state.selected_lines(),
         selected: state.selected_span(),
@@ -908,6 +919,7 @@ struct CodePresentation {
     on_line_hover: Option<HoverHandler>,
     on_token_hover: Option<TokenHoverHandler>,
     on_token_click: Option<TokenClickHandler>,
+    can_add_annotation: Option<Rc<dyn Fn(&DiffLinePosition) -> bool>>,
     selection: gpui_base::TextSelectionHandle,
     selected_lines: Option<DiffLineRange>,
     selected: Option<SelectedLines>,
@@ -1673,6 +1685,11 @@ fn add_annotation_button(
 ) -> Option<AnyElement> {
     let handler = code.on_add_annotation.clone()?;
     let position = code.position(file, side, ix);
+    if let Some(can_add) = &code.can_add_annotation
+        && !can_add(&position)
+    {
+        return None;
+    }
     let range = code
         .selected_lines
         .clone()
@@ -1700,16 +1717,26 @@ fn add_annotation_button(
             .flex()
             .items_center()
             .justify_center()
-            .rounded(cx.theme().radius)
-            .bg(cx.theme().primary)
-            .text_color(cx.theme().primary_foreground)
+            .cursor_pointer()
             .when(!at_selection_end, |this| {
                 this.opacity(0.)
                     .group_hover("diff-line", |this| this.opacity(1.))
             })
             .role(gpui::accesskit::Role::Button)
             .aria_label(t!("Diff.AddAnnotation", line = position.line()).to_string())
-            .child(Icon::new(IconName::Plus).xsmall())
+            // The web version's glyph: a 16px accent box with a bold white "+".
+            .child(
+                div()
+                    .size(px(16.))
+                    .rounded(px(4.))
+                    .bg(gpui::rgb(0x0078d4))
+                    .text_color(gpui::white())
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_size(px(13.))
+                    .line_height(px(16.))
+                    .text_center()
+                    .child("+"),
+            )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, window, cx| handler(&range, window, cx))
             .into_any_element(),
