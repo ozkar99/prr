@@ -557,7 +557,12 @@ impl Render for Home {
             .text_color(hsla(theme::FG))
             .text_size(theme::TEXT)
             // Room for the traffic lights; the transparent title bar keeps it draggable.
-            .child(div().h(theme::TITLEBAR).flex_shrink_0())
+            .child(
+                div().h(theme::TITLEBAR).flex_shrink_0().flex().items_center().justify_end().px(px(16.)).child(
+                    ui::link("open-settings", "Settings")
+                        .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::settings::OpenSettings), cx)),
+                ),
+            )
             .child(
                 div()
                     .id("home-scroll")

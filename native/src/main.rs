@@ -12,6 +12,7 @@ mod lsp;
 mod markdown;
 mod pr_view;
 mod review;
+mod settings;
 mod terminal;
 mod theme;
 mod ui;
@@ -59,6 +60,7 @@ fn main() {
         diffview::init(cx);
         pr_view::init(cx);
         theme::apply(cx);
+        settings::init(cx);
 
         let bounds = Bounds::centered(None, size(px(1500.), px(950.)), cx);
         cx.open_window(

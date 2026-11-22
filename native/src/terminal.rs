@@ -441,10 +441,11 @@ impl Render for TerminalView {
         let term = self.term.clone();
         let this = cx.entity().downgrade();
         let font = Font { family: FONT.into(), ..font(FONT) };
-        let font_size = px(FONT_SIZE);
+        let size = crate::settings::get(cx).terminal_font_size;
+        let font_size = px(size);
         let font_id = window.text_system().resolve_font(&font);
         let cell_w = window.text_system().advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(px(7.2));
-        let cell_h = px((FONT_SIZE * LINE_HEIGHT).ceil());
+        let cell_h = px((size * LINE_HEIGHT).ceil());
         let bounds_cell = std::rc::Rc::new(std::cell::Cell::new(Bounds::default()));
         let bounds_for_mouse = bounds_cell.clone();
         let bounds_for_drag = bounds_cell.clone();

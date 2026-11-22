@@ -218,7 +218,7 @@ impl PrView {
             _subs: vec![review_sub],
             agent_name: crate::backend::agent::info().name,
             agent_open: false,
-            agent_height: 300.,
+            agent_height: crate::settings::get(cx).agent_panel_height,
             agent: None,
             agent_status: AgentStatus::Idle,
             splitter_drag: None,
@@ -256,6 +256,10 @@ impl PrView {
             Some(Shown::File(ix)) => Some(*ix),
             _ => None,
         }
+    }
+
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus.clone()
     }
 
     pub fn select_file(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -980,6 +984,10 @@ impl PrView {
                     None => chip.into_any_element(),
                 })
             }))
+            .child(
+                ui::link("pr-settings", "⚙")
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::settings::OpenSettings), cx)),
+            )
             .child({
                 let url = pr.url.clone();
                 ui::link("open-github", "Open on GitHub").on_click(move |_, _, cx| cx.open_url(&url))
@@ -1572,7 +1580,15 @@ impl Render for PrView {
                     cx.notify();
                 }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.splitter_drag = None))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.splitter_drag.take().is_some() {
+                        let h = this.agent_height;
+                        crate::settings::update(cx, |s| s.agent_panel_height = h);
+                    }
+                }),
+            )
             .child(self.render_header(cx))
             .child({
                 let main = self.render_main(cx);

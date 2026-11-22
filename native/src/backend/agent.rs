@@ -29,8 +29,13 @@ pub fn config_path() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".review-tool-agent-command")
 }
 
-/// The custom command: the file's non-blank, non-`#` lines joined with spaces.
+/// The custom command: from Settings, else the legacy file's non-blank,
+/// non-`#` lines joined with spaces.
 fn configured_command() -> Option<String> {
+    let from_settings = crate::settings::load().agent_command;
+    if !from_settings.trim().is_empty() {
+        return Some(from_settings.trim().to_string());
+    }
     let text = std::fs::read_to_string(config_path()).ok()?;
     let command = text
         .lines()

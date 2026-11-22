@@ -2,11 +2,14 @@
 use crate::backend::{self, git};
 use crate::home::{Home, HomeEvent};
 use crate::pr_view::{PrView, PrViewEvent};
+use crate::settings::{OpenSettings, SettingsEvent, SettingsView};
 use gpui::*;
 
 pub struct AppView {
     home: Entity<Home>,
     pr: Option<Entity<PrView>>,
+    settings: Option<Entity<SettingsView>>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -16,7 +19,10 @@ impl AppView {
         let sub = cx.subscribe_in(&home, window, |this, _, event: &HomeEvent, window, cx| match event {
             HomeEvent::Opened { pr, checkout } => this.show_pr(pr.clone(), checkout.clone(), window, cx),
         });
-        Self { home, pr: None, _subscriptions: vec![sub] }
+        let focus = cx.focus_handle();
+        // App-wide shortcuts (⌘,) need something focused from the start.
+        window.focus(&focus, cx);
+        Self { home, pr: None, settings: None, focus, _subscriptions: vec![sub] }
     }
 
     /// Opens a PR (from the command line or another launch).
@@ -67,11 +73,43 @@ impl AppView {
     }
 }
 
-impl Render for AppView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        match &self.pr {
-            Some(pr) => div().size_full().child(pr.clone()),
-            None => div().size_full().child(self.home.clone()),
+impl AppView {
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_some() {
+            return;
         }
+        let view = cx.new(|cx| SettingsView::new(window, cx));
+        let sub = cx.subscribe_in(&view, window, |this, _, ev: &SettingsEvent, window, cx| match ev {
+            SettingsEvent::Close => {
+                this.settings = None;
+                // Back to the screen underneath (keyboard shortcuts need focus there).
+                match &this.pr {
+                    Some(pr) => {
+                        let handle = pr.read(cx).focus_handle();
+                        window.focus(&handle, cx);
+                    }
+                    None => window.focus(&this.focus, cx),
+                }
+                cx.notify();
+            }
+        });
+        self._subscriptions.push(sub);
+        self.settings = Some(view);
+        cx.notify();
+    }
+}
+
+impl Render for AppView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .relative()
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::open_settings))
+            .child(match &self.pr {
+                Some(pr) => pr.clone().into_any_element(),
+                None => self.home.clone().into_any_element(),
+            })
+            .children(self.settings.clone())
     }
 }
