@@ -30,13 +30,20 @@ single-instance plugin (own unix-socket handoff).
 - [x] **CP0** spike: gpui + gpui-component window renders on macOS without Xcode.
 - [x] **CP1** backend port + app shell: theme tokens (from styles.css), Home (setup check,
       open form, PR queue, storage), open PR → PR view shell (header, sidebar file list).
-- [ ] **CP2** diff view: highlighting, side-by-side alignment + hatched fillers, gutters,
-      change colors + inline word diff, scrolling, reveal first change, plain file view.
+- [~] **CP2** diff view: done: gpui-component `Diff` (split mode, whole-file patches via
+      `git diff -U<huge>`), tree-sitter highlighting with VS Code Dark Modern colors and
+      bracket-pair colors (src/highlight.rs), line numbers, +/- signs, change backgrounds,
+      inline word diff, reveal first change. Left: hatched fillers, exact VS Code diff
+      colors (the diff hardcodes 12%/30% opacities of theme success/danger), plain file
+      view for go-to-definition targets (CP3).
 - [ ] **CP3** LSP: hover popup (markdown), go-to-definition (⌘-click/F12) + back stack,
       peek, selection tracking.
 - [ ] **CP4** reviews: inline threads, composer, gutter "+", reply/resolve/delete,
       outdated threads, sidebar thread list, conversation view, finish-review panel.
 - [ ] **CP5** agent panel: terminal, MCP server + agent launch, ⌘L/⌘⇧L + context menu.
+- [ ] **CP7** Settings screen (user request): agent command (replaces hand-editing
+      ~/.review-tool-agent-command), editor and UI font sizes, and other preferences;
+      stored in ~/Library/Application Support/review-tool/settings.json.
 - [ ] **CP6** CLI + single instance, local clone flow + switch dialog, cleanup, packaging
       (.app, cask, release workflow), remove web/Node pieces, README.
 

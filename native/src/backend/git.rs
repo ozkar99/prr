@@ -168,3 +168,16 @@ pub async fn read_at_commit(root: &str, sha: &str, path: &str) -> Result<Option<
     }
     Ok(git(&["show", &format!("{sha}:{path}")], Some(Path::new(root))).await.ok())
 }
+
+/// One file's change as a unified diff with the whole file as context (like the
+/// web version's full-file diff view). `previous_path` is the old name of a renamed file.
+pub async fn file_patch(root: &str, merge_base: &str, head_sha: &str, path: &str, previous_path: Option<&str>) -> Result<String, String> {
+    valid_sha(merge_base)?;
+    valid_sha(head_sha)?;
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", "-M", "-U100000000", merge_base, head_sha, "--"];
+    if let Some(old) = previous_path {
+        args.push(old);
+    }
+    args.push(path);
+    git(&args, Some(Path::new(root))).await
+}

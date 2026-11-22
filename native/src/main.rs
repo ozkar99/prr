@@ -2,6 +2,7 @@
 
 mod app;
 mod backend;
+mod highlight;
 mod home;
 mod markdown;
 mod pr_view;
