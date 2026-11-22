@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { parsePRRef, type Checkout, type PRDetails, type PRRef, type PRSummary } from '../../shared/types'
 import { PRView } from './PRView'
+import { SetupCheck } from './SetupCheck'
 
 type Opened = { pr: PRDetails; checkout: Checkout }
 
@@ -17,7 +18,7 @@ export function App() {
     window.api.reviewQueue().then(setQueue, (e: Error) => setQueueError(e.message))
   }, [])
 
-  useEffect(loadQueue, [loadQueue])
+  // The queue loads once the setup check confirms git and a logged-in gh (see SetupCheck).
   useEffect(() => window.api.onProgress(setBusy), [])
 
   const open = async (owner: string, repo: string, number: number) => {
@@ -57,6 +58,7 @@ export function App() {
     <div className="home">
       <div className="titlebar" data-tauri-drag-region />
       <div className="home-body">
+        <SetupCheck onRequiredOk={loadQueue} />
         <form
           className="open-form"
           onSubmit={(e) => {

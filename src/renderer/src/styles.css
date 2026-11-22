@@ -222,3 +222,14 @@ h3:where(.home *) { font-size: 12px; text-transform: uppercase; letter-spacing: 
 .agent-overlay { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; display: flex; gap: 10px; align-items: center; }
 .agent-overlay.error { color: var(--del); max-width: 80%; }
 .button.toggled { background: var(--active); border-color: var(--accent); }
+
+/* First-run setup check */
+.setup { margin-bottom: 14px; }
+.setup-summary { display: flex; gap: 12px; align-items: baseline; font-size: 12px; }
+.setup-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-top: 8px; background: var(--panel); display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.setup-card.required { border-color: var(--del); }
+.setup-title { font-weight: 600; }
+.tool-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.tool-list li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.tool-problem { color: var(--warn); font-size: 12px; }
+.tool-fix { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; cursor: copy; user-select: all; }

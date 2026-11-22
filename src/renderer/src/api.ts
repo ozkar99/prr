@@ -54,6 +54,7 @@ const api: Api = {
   setReviewContext: (review) => call('set_review_context', { review }),
   setSelection: (selection) => call('set_selection', { selection }),
   agentInfo: () => call('agent_info'),
+  checkTools: () => call('check_tools'),
   async agentStart(opts, onData) {
     const channel = new Channel<ArrayBuffer>()
     channel.onmessage = (bytes) => onData(new Uint8Array(bytes))

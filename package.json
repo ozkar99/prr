@@ -3,11 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "review-tool": "bin/review-tool.mjs"
-  },
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "REVIEW_TOOL_APP=1 tauri dev",
     "build": "tauri build --bundles app",
     "dev:web": "vite --config vite.config.ts",
     "build:web": "vite build --config vite.config.ts",

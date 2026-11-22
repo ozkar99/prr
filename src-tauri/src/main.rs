@@ -10,5 +10,9 @@ fn main() {
         }
         return;
     }
+    // `review-tool [PR]` typed in a terminal: hand the PR to the app and return.
+    if review_tool_lib::handle_cli(&args) {
+        return;
+    }
     review_tool_lib::run()
 }

@@ -1,4 +1,6 @@
 mod agent;
+mod cli;
+mod deps;
 mod devtools;
 mod exec;
 mod fsaccess;
@@ -147,6 +149,11 @@ fn agent_start(app: AppHandle, root: String, pr_label: String, merge_base: Strin
 }
 
 #[tauri::command]
+async fn check_tools() -> Vec<deps::ToolStatus> {
+    deps::check().await
+}
+
+#[tauri::command]
 fn agent_info() -> agent::AgentInfo {
     agent::info()
 }
@@ -189,6 +196,12 @@ fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
         let _ = app.opener().open_url(url.as_str(), None::<&str>);
     }
     is_app
+}
+
+/// A terminal invocation (`review-tool [PR]`); returns true if it was handled
+/// and the app shouldn't start in this process.
+pub fn handle_cli(args: &[String]) -> bool {
+    cli::handle(args)
 }
 
 /// `review-tool --mcp-stdio <url> <token>` runs the stdio MCP bridge instead of the app.
@@ -259,6 +272,7 @@ pub fn run() {
             set_selection,
             agent_start,
             agent_info,
+            check_tools,
             pty_write,
             pty_resize,
             pty_kill,

@@ -7,6 +7,15 @@ export function parsePRRef(input: string): PRRef | undefined {
   return m ? { owner: m[1], repo: m[2], number: Number(m[3]) } : undefined
 }
 
+export type ToolStatus = {
+  name: string
+  purpose: string
+  required: boolean
+  ok: boolean
+  problem: string | null
+  fix: string | null
+}
+
 export type AgentInfo = { name: string; command: string | null; configPath: string }
 
 /** The open PR, as the agent sees it through the get_pr / get_file_diff tools. */
@@ -172,6 +181,8 @@ export type Api = {
   setReviewContext(review: ReviewContext | null): Promise<void>
   /** Reports what the user has selected, for the agent's get_selection tool. */
   setSelection(selection: EditorSelection | null): Promise<void>
+  /** Which external tools (git, gh, language servers, agent) are available. */
+  checkTools(): Promise<ToolStatus[]>
   /** The agent the panel runs: Claude Code, or the command in ~/.review-tool-agent-command. */
   agentInfo(): Promise<AgentInfo>
   /** Starts the agent in a terminal; returns the terminal id. */

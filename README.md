@@ -47,12 +47,17 @@ The first build compiles the Rust dependencies and takes a few minutes. The resu
 
 ### 3. Add the `review-tool` command
 
+The app's own binary is the command. Link it onto your `PATH`:
+
 ```sh
-npm link
+ln -sf "$PWD/src-tauri/target/release/bundle/macos/Review Tool.app/Contents/MacOS/review-tool" /opt/homebrew/bin/review-tool
 ```
 
-This puts `review-tool` on your `PATH`, pointing at this checkout. It launches the app built in
-step 2; after pulling new changes, run `npm run build` again.
+(Any directory on your `PATH` works; `/opt/homebrew/bin` is there on Apple Silicon Macs with
+Homebrew.) After pulling new changes, run `npm run build` again.
+
+On first launch the home screen checks for the tools above and shows the install command for
+anything missing.
 
 ## Usage
 
@@ -192,7 +197,8 @@ npm run build      # release .app
 ```
 
 While `npm run dev` is running, `review-tool <pr>` opens PRs in the dev window (the app allows
-a single instance).
+a single instance). `npm run dev` sets `REVIEW_TOOL_APP=1` so the binary starts as the app even
+though it's launched from a terminal.
 
 For scripted testing, a development build started with `REVIEW_TOOL_DEBUG_EVAL=<port>` runs
 JavaScript POSTed to `http://127.0.0.1:<port>/` in the window and returns the JSON result
@@ -201,11 +207,37 @@ JavaScript POSTed to `http://127.0.0.1:<port>/` in the window and returns the JS
 Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one bare clone per repo,
 `worktrees/` one checkout per PR. Delete either to free space; they're re-created on demand.
 
+### Releasing
+
+Push a version tag to build a universal (Apple Silicon + Intel) app and attach it to a draft
+GitHub Release:
+
+```sh
+# bump "version" in src-tauri/tauri.conf.json, src-tauri/Cargo.toml and package.json, then:
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Review the draft on GitHub and publish it. **Actions → Release → Run workflow** builds without
+releasing (the app is attached to the run as an artifact).
+
+Without Apple signing the app is unsigned, and macOS blocks it when downloaded. To sign and
+notarize, add these repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `APPLE_CERTIFICATE` | The "Developer ID Application" certificate exported as `.p12`, base64-encoded (`base64 -i cert.p12 \| pbcopy`) |
+| `APPLE_CERTIFICATE_PASSWORD` | The `.p12` export password |
+| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_ID` | The Apple ID email used for notarization |
+| `APPLE_PASSWORD` | An app-specific password for that Apple ID (appleid.apple.com → Sign-In and Security) |
+| `APPLE_TEAM_ID` | The 10-character team ID |
+
 ### How it works
 
 | Piece | Where |
 |---|---|
-| `review-tool` command: resolves the PR with `gh`, launches or reuses the app | `bin/review-tool.mjs` |
+| `review-tool` command: resolves the PR with `gh`, launches or reuses the app | `src-tauri/src/cli.rs` |
+| Setup check (git, gh login, language servers, agent) | `src-tauri/src/deps.rs`, `src/renderer/src/SetupCheck.tsx` |
 | App setup, commands, single instance, window | `src-tauri/src/lib.rs` |
 | GitHub API: review queue, PR files, threads, comments, submitting reviews | `src-tauri/src/github.rs` |
 | Bare clone per repo + `git worktree` per PR, diff against the merge-base | `src-tauri/src/git.rs` |
