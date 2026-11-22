@@ -8,7 +8,7 @@ use gpui_base::input::HighlightStyleResolver;
 use similar::{ChangeTag, TextDiff};
 
 use super::{DiffFile, DiffSide, document::SourceLine};
-use gpui_component::{Rope, highlighter::SyntaxHighlighter};
+use gpui_component::highlighter::SyntaxHighlighter;
 
 /// The unit inline changes are compared and emphasized in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

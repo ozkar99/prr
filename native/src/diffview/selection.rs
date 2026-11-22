@@ -96,6 +96,16 @@ impl SelectionGeometry {
         ))
     }
 
+    /// The source character exactly under a window position (not the nearest
+    /// one): its file, side, 1-based line, and byte column in that line.
+    pub fn hit(&self, point: Point<Pixels>) -> Option<(usize, DiffSide, usize, usize)> {
+        let run = self.runs.iter().find(|run| run.visible.contains(&point))?;
+        let ix = run.layout.index_for_position(point).ok()?;
+        let line = &run.document.lines(run.side)[run.line_ix];
+        let column = line.source_offset(run.display_range.start + ix);
+        Some((run.file, run.side, line.line_number(), column))
+    }
+
     fn run_at(&self, point: Point<Pixels>, side: Option<DiffSide>) -> Option<&CodeRun> {
         let side = side.or_else(|| {
             self.runs

@@ -38,6 +38,7 @@ impl AppView {
     /// Leaves the open PR; if it switched the user's own clone, switches it back.
     fn close_pr(&mut self, cx: &mut Context<Self>) {
         let Some(view) = self.pr.take() else { return };
+        view.update(cx, |v, _| v.stop_language_servers());
         let (local, head_sha, number) = {
             let v = view.read(cx);
             (v.checkout.local.clone(), v.checkout.head_sha.clone(), v.pr.number)

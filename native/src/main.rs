@@ -5,6 +5,7 @@ mod backend;
 mod diffview;
 mod highlight;
 mod home;
+mod lsp;
 mod markdown;
 mod pr_view;
 mod theme;
@@ -27,6 +28,7 @@ fn main() {
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
         diffview::init(cx);
+        pr_view::init(cx);
         theme::apply(cx);
 
         let bounds = Bounds::centered(None, size(px(1500.), px(950.)), cx);

@@ -40,11 +40,16 @@ single-instance plugin (own unix-socket handoff).
       actions renamed to `review_diff`, key context `ReviewDiff`, English strings via a
       local `t!` (strings.rs), our highlighter/language detection instead of GPUI Kit's
       private ones. Crate is edition 2024 (the vendored code uses let chains).
-- [ ] **CP3** LSP: hover popup (markdown), go-to-definition (⌘-click/F12) + back stack,
+- [~] **CP3** LSP: hover popup (markdown), go-to-definition (⌘-click/F12) + back stack,
       peek, selection tracking. Plan: add character-level hover/click callbacks to the
       vendored diff (it already maps mouse → text offsets for selection, see selection.rs),
       an in-process LSP client (reuse framing from backend; lsp-types), and a single-column
       mode of the diff for plain files.
+      Done: src/lsp.rs (JSON-RPC client, gopls/clangd/pyright/starpls/bash-ls, hover +
+      definition; tested against gopls), token hover/click in the diff, hover popup
+      (Markdown), ⌘-click / F12 go-to-definition, plain-file view, back stack (Ctrl+- and ←),
+      server status chips. Left: peek definition, references, selection tracking for the
+      agent, manually checking hover placement with a real pointer.
 - [ ] **CP4** reviews: inline threads, composer, gutter "+", reply/resolve/delete,
       outdated threads, sidebar thread list, conversation view, finish-review panel.
 - [ ] **CP5** agent panel: terminal, MCP server + agent launch, ⌘L/⌘⇧L + context menu.

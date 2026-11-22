@@ -197,6 +197,19 @@ type MarkerRenderer = Rc<dyn Fn(&DiffGutterMarker, &mut Window, &mut App) -> Any
 type RangeHandler = Rc<dyn Fn(&DiffLineRange, &mut Window, &mut App)>;
 type ClickHandler = Rc<dyn Fn(&DiffLinePosition, &ClickEvent, &mut Window, &mut App)>;
 type HoverHandler = Rc<dyn Fn(Option<&DiffLinePosition>, &mut Window, &mut App)>;
+type TokenHoverHandler = Rc<dyn Fn(Option<&TokenHit>, &mut Window, &mut App)>;
+type TokenClickHandler = Rc<dyn Fn(&TokenHit, &ClickEvent, &mut Window, &mut App)>;
+
+/// The character under the pointer in a code line (added for LSP hover and
+/// go-to-definition; not in GPUI Kit's diff).
+#[derive(Clone, Debug)]
+pub struct TokenHit {
+    pub position: DiffLinePosition,
+    /// Byte offset of the character within its source line.
+    pub column: usize,
+    /// Pointer position in window coordinates (anchors hover popups).
+    pub point: gpui::Point<Pixels>,
+}
 
 #[derive(Default)]
 struct HeaderSlots {
@@ -242,6 +255,8 @@ pub struct Diff {
     on_add_annotation: Option<RangeHandler>,
     on_line_click: Option<ClickHandler>,
     on_line_hover: Option<HoverHandler>,
+    on_token_hover: Option<TokenHoverHandler>,
+    on_token_click: Option<TokenClickHandler>,
 }
 
 fn file_renderer<F, E>(render: F) -> FileRenderer
@@ -275,6 +290,8 @@ impl Diff {
             on_add_annotation: None,
             on_line_click: None,
             on_line_hover: None,
+            on_token_hover: None,
+            on_token_click: None,
         }
     }
     /// Shows the original and modified line-number lanes. Default is true.
@@ -494,6 +511,22 @@ impl Diff {
         self
     }
     /// Reports the line under the pointer, or `None` when the pointer leaves it.
+    /// Reports the character under the pointer as it moves over code, or `None`.
+    pub fn on_token_hover<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(Option<&TokenHit>, &mut Window, &mut App) + 'static,
+    {
+        self.on_token_hover = Some(Rc::new(handler));
+        self
+    }
+    /// Handles a click on a character of code (e.g. ⌘-click for go-to-definition).
+    pub fn on_token_click<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&TokenHit, &ClickEvent, &mut Window, &mut App) + 'static,
+    {
+        self.on_token_click = Some(Rc::new(handler));
+        self
+    }
     pub fn on_line_hover<F>(mut self, handler: F) -> Self
     where
         F: Fn(Option<&DiffLinePosition>, &mut Window, &mut App) + 'static,
@@ -617,6 +650,8 @@ fn render_diff(
         on_add_annotation: props.on_add_annotation,
         on_line_click: props.on_line_click,
         on_line_hover: props.on_line_hover,
+        on_token_hover: props.on_token_hover,
+        on_token_click: props.on_token_click,
         selection: state.selection().clone(),
         selected_lines: state.selected_lines(),
         selected: state.selected_span(),
@@ -869,6 +904,8 @@ struct CodePresentation {
     on_add_annotation: Option<RangeHandler>,
     on_line_click: Option<ClickHandler>,
     on_line_hover: Option<HoverHandler>,
+    on_token_hover: Option<TokenHoverHandler>,
+    on_token_click: Option<TokenClickHandler>,
     selection: gpui_base::TextSelectionHandle,
     selected_lines: Option<DiffLineRange>,
     selected: Option<SelectedLines>,
@@ -1872,6 +1909,19 @@ fn code_line(
                 handler(&position, event, window, cx)
             })
         })
+        .when_some(code.on_token_click.clone(), |this, handler| {
+            let geometry = code.geometry.clone();
+            let path = position.path().clone();
+            this.on_click(move |event, window, cx| {
+                let point = event.position();
+                if let Some((f, side, line, column)) = geometry.borrow().hit(point)
+                    && f == file
+                {
+                    let hit = TokenHit { position: DiffLinePosition::new(path.clone(), side, line), column, point };
+                    handler(&hit, event, window, cx)
+                }
+            })
+        })
         .child(text);
     h_flex()
         .id("line-row")
@@ -1906,6 +1956,25 @@ fn code_line(
             let position = position.clone();
             this.on_hover(move |hovered, window, cx| {
                 handler(hovered.then_some(&position), window, cx)
+            })
+        })
+        .when_some(code.on_token_hover.clone(), |this, handler| {
+            let geometry = code.geometry.clone();
+            let path = position.path().clone();
+            let leave = handler.clone();
+            this.on_mouse_move(move |event, window, cx| {
+                let hit = geometry.borrow().hit(event.position);
+                let token = hit.filter(|(f, ..)| *f == file).map(|(_, side, line, column)| TokenHit {
+                    position: DiffLinePosition::new(path.clone(), side, line),
+                    column,
+                    point: event.position,
+                });
+                handler(token.as_ref(), window, cx)
+            })
+            .on_hover(move |hovered, window, cx| {
+                if !hovered {
+                    leave(None, window, cx)
+                }
             })
         })
         .when(code.line_number, |this| {
