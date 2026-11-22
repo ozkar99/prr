@@ -1,32 +1,53 @@
+#![allow(dead_code)] // while the rewrite is in progress, parts of the backend aren't wired up yet
+
+mod app;
+mod backend;
+mod home;
+mod markdown;
+mod pr_view;
+mod theme;
+mod ui;
+
 use gpui::*;
-use gpui_component::{button::Button, Root};
+use gpui_component::Root;
 
-struct Hello;
-
-impl Render for Hello {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .items_center()
-            .justify_center()
-            .bg(rgb(0x1f1f1f))
-            .text_color(rgb(0xcccccc))
-            .child("Review Tool (native) spike")
-            .child(Button::new("ok").label("It works"))
-    }
+/// `--open-pr=<url>` (and `--local-repo=<path>`), as passed by the `review-tool` command.
+fn launch_pr() -> Option<backend::types::PRRef> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut pr = args.iter().find_map(|a| a.strip_prefix("--open-pr=").and_then(backend::types::parse_pr_ref))?;
+    pr.local_repo = args.iter().find_map(|a| a.strip_prefix("--local-repo=").map(String::from));
+    Some(pr)
 }
 
 fn main() {
-    gpui_platform::application().run(|cx: &mut App| {
+    backend::exec::augment_path();
+    let launch = launch_pr();
+    gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
-        cx.open_window(WindowOptions::default(), |window, cx| {
-            let view = cx.new(|_| Hello);
-            cx.new(|cx| Root::new(view, window, cx))
-        })
-        .unwrap();
+        theme::apply(cx);
+
+        let bounds = Bounds::centered(None, size(px(1500.), px(950.)), cx);
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Review Tool".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(16.), px(13.))),
+                }),
+                window_background: WindowBackgroundAppearance::Opaque,
+                ..Default::default()
+            },
+            |window, cx| {
+                let view = cx.new(|cx| app::AppView::new(window, cx));
+                if let Some(pr) = launch.clone() {
+                    view.update(cx, |view, cx| view.open(pr, window, cx));
+                }
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        )
+        .expect("failed to open the window");
         cx.activate(true);
+        cx.spawn(async move |_| backend::cleanup::on_startup().await).detach();
     });
 }

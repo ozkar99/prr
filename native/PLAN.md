@@ -28,7 +28,7 @@ single-instance plugin (own unix-socket handoff).
 ## Checkpoints
 
 - [x] **CP0** spike: gpui + gpui-component window renders on macOS without Xcode.
-- [ ] **CP1** backend port + app shell: theme tokens (from styles.css), Home (setup check,
+- [x] **CP1** backend port + app shell: theme tokens (from styles.css), Home (setup check,
       open form, PR queue, storage), open PR → PR view shell (header, sidebar file list).
 - [ ] **CP2** diff view: highlighting, side-by-side alignment + hatched fillers, gutters,
       change colors + inline word diff, scrolling, reveal first change, plain file view.
