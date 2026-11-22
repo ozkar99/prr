@@ -2,6 +2,8 @@
 
 mod app;
 mod backend;
+#[cfg(debug_assertions)]
+mod devdriver;
 mod diffview;
 mod highlight;
 mod home;
@@ -47,6 +49,15 @@ fn main() {
                 let view = cx.new(|cx| app::AppView::new(window, cx));
                 if let Some(pr) = launch.clone() {
                     view.update(cx, |view, cx| view.open(pr, window, cx));
+                }
+                #[cfg(debug_assertions)]
+                {
+                    let weak = view.downgrade();
+                    devdriver::start(cx, move |url, window, cx| {
+                        if let Some(pr) = backend::types::parse_pr_ref(&url) {
+                            weak.update(cx, |view, cx| view.open(pr, window, cx)).ok();
+                        }
+                    });
                 }
                 cx.new(|cx| Root::new(view, window, cx))
             },

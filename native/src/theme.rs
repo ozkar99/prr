@@ -1,6 +1,6 @@
 //! Colors and sizes, taken from the web version's `src/renderer/src/styles.css`
 //! (the CSS variables at its top) so both apps look the same.
-use gpui::{rgb, App, Hsla, Pixels, px};
+use gpui::{rgb, rgba, pattern_slash, App, Background, Hsla, Pixels, px};
 use gpui_component::{Theme, ThemeMode};
 
 pub const BG: u32 = 0x1f1f1f;
@@ -91,4 +91,26 @@ pub fn apply(cx: &mut App) {
     c.danger = hsla(DEL);
     c.success = hsla(ADD);
     c.warning = hsla(WARN);
+}
+
+// ---- Diff colors (VS Code Dark Modern defaults) ----
+
+/// diffEditor.removedLineBackground / insertedLineBackground.
+pub fn diff_line_bg(removed: bool) -> Hsla {
+    if removed { rgba(0xff000033).into() } else { rgba(0x9bb95533).into() }
+}
+
+/// diffEditor.removedTextBackground / insertedTextBackground (changed words, on top of the line).
+pub fn diff_text_bg(removed: bool) -> Hsla {
+    if removed { rgba(0xff000033).into() } else { rgba(0x9ccc2c33).into() }
+}
+
+/// diffEditor.diagonalFill: hatching where the other side has lines and this one has none.
+pub fn diff_filler() -> Background {
+    pattern_slash(rgba(0xcccccc40), 2., 6.)
+}
+
+/// Monaco's line height for a font size on macOS (1.5×, rounded).
+pub fn code_row_height(font_size: f32) -> f32 {
+    (font_size * 1.5).round()
 }

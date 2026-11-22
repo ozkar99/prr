@@ -5032,6 +5032,8 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "libc",
+ "objc",
+ "raw-window-handle",
  "regex",
  "reqwest",
  "serde",

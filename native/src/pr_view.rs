@@ -224,7 +224,14 @@ impl PrView {
                 if this.load_seq != seq {
                     return;
                 }
-                let first = if is_plain { None } else { patch.as_ref().ok().and_then(|p| first_change(p, &patch_path)) };
+                // Like Monaco's revealLineInCenterIfOutsideViewport: stay at the top when the
+                // first change is already on screen, otherwise put it about a third down.
+                let first = if is_plain { None } else { patch.as_ref().ok().and_then(|p| first_change(p, &patch_path)) }
+                    .map(|pos| {
+                        let line = pos.line();
+                        let top = if line <= 30 { 1 } else { line - 12 };
+                        DiffLinePosition::new(patch_path.clone(), pos.side(), top)
+                    });
                 let target = line.map(|(side, n)| DiffLinePosition::new(patch_path.clone(), side, n)).or(first);
                 this.file_view = match patch.and_then(|p| DiffFile::parse(&p).map_err(|e| e.message().to_string())) {
                     Ok(files) if !files.is_empty() => {

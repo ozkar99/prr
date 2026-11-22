@@ -557,9 +557,11 @@ fn render_diff(
     state.set_window(window.window_handle().window_id());
     state.ensure_presentation(cx);
     let rem = window.rem_size();
-    let font_size = rem * (f32::from(cx.theme().mono_font_size) / 16.);
+    // VS Code metrics: the editor font size in px and Monaco's row height (not rem-relative).
+    let _ = rem;
+    let font_size = cx.theme().mono_font_size;
     let font_family = cx.theme().mono_font_family.clone();
-    let row_height = font_size * 1.6;
+    let row_height = px(crate::theme::code_row_height(f32::from(font_size)));
     let digits = state
         .files()
         .iter()
@@ -1521,7 +1523,7 @@ fn render_cell(
             this.border_r_1().border_color(cx.theme().border)
         })
         .when(ix.is_none(), |this| {
-            this.bg(cx.theme().muted.opacity(0.3))
+            this.bg(crate::theme::diff_filler())
                 .child(div().h(code.row_height))
         });
     let Some(ix) = ix else {
@@ -1642,7 +1644,7 @@ fn line_highlights(
             (
                 range,
                 HighlightStyle {
-                    background_color: Some(status.opacity(0.3)),
+                    background_color: Some(crate::theme::diff_text_bg(side == DiffSide::Original)),
                     ..Default::default()
                 },
             )
@@ -1942,7 +1944,7 @@ fn code_line(
         .text_size(code.font_size)
         .line_height(code.row_height)
         .when(changed && code.change_background, |this| {
-            this.bg(status.opacity(0.12))
+            this.bg(crate::theme::diff_line_bg(side == DiffSide::Original))
         })
         // An overlay, so the change background shows through a translucent fill.
         .when_some(decoration, |this, background| {
