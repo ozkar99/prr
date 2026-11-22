@@ -151,7 +151,7 @@ export type Checkout = {
   headSha: string
 }
 
-export type LspLanguage = 'go' | 'cpp' | 'python' | 'starlark'
+export type LspLanguage = 'go' | 'cpp' | 'python' | 'starlark' | 'shell'
 
 export type FileStat = { type: 'file' | 'directory'; size: number; mtime: number; ctime: number }
 

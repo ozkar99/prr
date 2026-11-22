@@ -10,10 +10,17 @@ const selectors: Record<LspLanguage, { scheme: string; language: string }[]> = {
     { scheme: 'file', language: 'c' }
   ],
   python: [{ scheme: 'file', language: 'python' }],
-  starlark: [{ scheme: 'file', language: 'starlark' }]
+  starlark: [{ scheme: 'file', language: 'starlark' }],
+  shell: [{ scheme: 'file', language: 'shellscript' }]
 }
 
-export const serverNames: Record<LspLanguage, string> = { go: 'gopls', cpp: 'clangd', python: 'pyright', starlark: 'starpls' }
+export const serverNames: Record<LspLanguage, string> = {
+  go: 'gopls',
+  cpp: 'clangd',
+  python: 'pyright',
+  starlark: 'starpls',
+  shell: 'bash-language-server'
+}
 
 const STARLARK_FILES = /(^|\/)(BUILD|WORKSPACE|WORKSPACE\.bzlmod|MODULE\.bazel)$|\.(bzl|star|bazel|sky)$/
 
@@ -25,6 +32,7 @@ export function languagesFor(paths: string[]): LspLanguage[] {
     if (/\.(c|cc|cpp|cxx|h|hh|hpp|hxx|ipp|inl|m|mm)$/.test(p)) langs.add('cpp')
     if (/\.pyi?$/.test(p)) langs.add('python')
     if (STARLARK_FILES.test(p)) langs.add('starlark')
+    if (/\.(sh|bash|zsh|ksh)$|(^|\/)\.?(bashrc|bash_profile|zshrc|profile)$/.test(p)) langs.add('shell')
   }
   return [...langs]
 }

@@ -2,6 +2,7 @@
 import '@codingame/monaco-vscode-go-default-extension'
 import '@codingame/monaco-vscode-cpp-default-extension'
 import '@codingame/monaco-vscode-python-default-extension'
+import '@codingame/monaco-vscode-shellscript-default-extension'
 import { registerExtension, type RegisterLocalExtensionResult } from '@codingame/monaco-vscode-api/extensions'
 import pythonGrammarUrl from '@codingame/monaco-vscode-python-default-extension/resources/MagicPython.tmLanguage.json?url'
 import pythonLanguageConfigUrl from '@codingame/monaco-vscode-python-default-extension/resources/language-configuration.json?url'

@@ -64,7 +64,7 @@ pub async fn check() -> Vec<ToolStatus> {
             has("clangd") || std::path::Path::new("/opt/homebrew/opt/llvm/bin/clangd").exists(),
             "xcode-select --install",
         ),
-        tool("node", "Python: types and navigation (runs pyright)", false, has("node"), "brew install node"),
+        tool("node", "Python and shell scripts: types and navigation (runs pyright, bash-language-server)", false, has("node"), "brew install node"),
         tool(
             "starpls",
             "Starlark/Bazel: types and navigation",

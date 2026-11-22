@@ -16,11 +16,11 @@ peek views, Markdown renderer) as npm packages via
 
 | Tool | Why | Install |
 |---|---|---|
+| macOS 10.15 or later, Apple Silicon or Intel | | |
 | Homebrew | installs and updates the app | [brew.sh](https://brew.sh) |
 | Xcode Command Line Tools | git (checking out PRs) and clangd (C/C++) | `xcode-select --install` |
 
-Homebrew also installs the GitHub CLI (`gh`) and Node.js with the app. The app uses `gh`'s login,
-so log in once after installing: `gh auth login`.
+Homebrew also installs the GitHub CLI (`gh`) and Node.js with the app.
 
 Language servers. Syntax highlighting works without them; they add hover types and navigation.
 Install only the ones for languages you review:
@@ -30,6 +30,7 @@ Install only the ones for languages you review:
 | Go | `.go` | gopls | `brew install go`, then `go install golang.org/x/tools/gopls@latest` |
 | C/C++ | `.c` `.cc` `.cpp` `.h` `.hpp` … | clangd | included with Xcode Command Line Tools (Homebrew `llvm` is used if installed) |
 | Python | `.py` `.pyi` | pyright | nothing: bundled with the app (runs on Node.js) |
+| Shell | `.sh` `.bash` `.zsh` `.ksh`, `.bashrc`, `.zshrc`, … | bash-language-server | nothing: bundled with the app (runs on Node.js) |
 | Starlark / Bazel | `BUILD` `.bazel` `.bzl` `WORKSPACE` `MODULE.bazel` | starpls | download from [starpls releases](https://github.com/withered-magic/starpls/releases) and put it on your `PATH` |
 
 A missing server shows as **not installed** in the app's header; hover over it for the install command.
@@ -38,22 +39,23 @@ A missing server shows as **not installed** in the app's header; hover over it f
 
 ```sh
 brew tap ozkar99/review-tool https://github.com/ozkar99/review-tool
-brew install review-tool
+brew trust --cask ozkar99/review-tool/review-tool   # Homebrew asks before using a third-party tap
+brew install --cask review-tool
 ```
 
-Homebrew builds the app on your Mac (the first install takes a few minutes and pulls in Rust and
-Node as build tools). Because it's built locally, macOS opens it without any security prompt. This
-also puts the `review-tool` command on your `PATH`. To open the app from Launchpad or Spotlight
-too:
+This installs **Review Tool** into Applications and the `review-tool` command onto your `PATH`,
+along with the GitHub CLI and Node.js if you don't have them. Then log in to GitHub once (the app
+uses `gh`'s login):
 
 ```sh
-ln -sf "$(brew --prefix review-tool)/Review Tool.app" ~/Applications/
+gh auth login
 ```
 
-Update with `brew upgrade review-tool`.
+Update with `brew upgrade --cask review-tool`; uninstall with `brew uninstall --cask review-tool`
+(add `--zap` to also remove its checkouts and settings).
 
-On first launch the home screen checks for the tools above and shows the install command for
-anything missing.
+On first launch the home screen checks for the tools the app uses and shows the install command
+for anything missing.
 
 ## Usage
 
@@ -231,22 +233,21 @@ Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one bar
 
 ### Releasing
 
-1. Bump `version` in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, commit, and push.
-2. Tag it: `git tag -a v0.2.0 -m "Review Tool v0.2.0" && git push origin v0.2.0`
-3. Point the formula at the new tag: in `Formula/review-tool.rb`, update `url` to the new tag and
-   `sha256` to `curl -sL <url> | shasum -a 256`, then commit and push. Teammates get it with
-   `brew upgrade review-tool`.
+1. Bump `version` in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`;
+   commit and push.
+2. Tag it: `git tag -a v0.3.0 -m "Review Tool v0.3.0" && git push origin v0.3.0`. CI
+   (`.github/workflows/release.yml`) builds a universal (Apple Silicon + Intel) app and publishes
+   it as a GitHub Release.
+3. Point the cask at it: in `Casks/review-tool.rb`, set `version` and set `sha256` to the
+   checksum of the release's `.dmg`
+   (`curl -sL <dmg url> | shasum -a 256`), then commit and push. Teammates get it with
+   `brew upgrade --cask review-tool`.
 
-The tag also triggers a CI build of a universal app (unsigned unless the Apple secrets below are
-set) attached to a draft GitHub Release. Push a version tag to build a universal (Apple Silicon + Intel) app and attach it to a draft
-GitHub Release:
+**Actions → Release → Run workflow** builds without releasing (the app is attached to the run).
 
-Review the draft on GitHub and publish it if you want a downloadable `.dmg` (not needed for
-Homebrew installs). **Actions → Release → Run workflow** builds without
-releasing (the app is attached to the run as an artifact).
-
-Without Apple signing the app is unsigned, and macOS blocks it when downloaded. To sign and
-notarize, add these repository secrets (Settings → Secrets and variables → Actions):
+The app is ad-hoc signed; the cask clears macOS's download quarantine so it opens without a
+prompt. To sign and notarize with an Apple Developer ID instead, add these repository secrets
+(Settings → Secrets and variables → Actions) and the workflow uses them automatically:
 
 | Secret | Value |
 |---|---|
@@ -262,6 +263,7 @@ notarize, add these repository secrets (Settings → Secrets and variables → A
 | Piece | Where |
 |---|---|
 | `review-tool` command: resolves the PR with `gh`, launches or reuses the app | `src-tauri/src/cli.rs` |
+| Homebrew cask (this repo is also the tap) | `Casks/review-tool.rb` |
 | Setup check (git, gh login, language servers, agent) | `src-tauri/src/deps.rs`, `src/renderer/src/SetupCheck.tsx` |
 | App setup, commands, single instance, window | `src-tauri/src/lib.rs` |
 | GitHub API: review queue, PR files, threads, comments, submitting reviews | `src-tauri/src/github.rs` |

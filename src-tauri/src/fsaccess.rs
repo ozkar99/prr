@@ -12,6 +12,8 @@ static ROOTS: OnceCell<Vec<PathBuf>> = OnceCell::const_new();
 
 /// Where the bundled (or, in development, the npm-installed) pyright lives.
 pub static PYRIGHT_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+/// bash-language-server's entry point (cli.js), bundled or from node_modules.
+pub static BASH_LS: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
 
 async fn allowed_roots() -> &'static Vec<PathBuf> {
     ROOTS

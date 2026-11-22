@@ -187,6 +187,13 @@ fn find_pyright(app: &AppHandle) -> Option<PathBuf> {
     [bundled, Some(dev)].into_iter().flatten().find(|d| d.join("langserver.index.js").exists()).and_then(|d| d.canonicalize().ok())
 }
 
+/// bash-language-server: bundled as its own npm install in the app; in development, from node_modules.
+fn find_bash_ls(app: &AppHandle) -> Option<PathBuf> {
+    let bundled = app.path().resource_dir().ok().map(|d| d.join("bash-language-server/node_modules/bash-language-server/out/cli.js"));
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../node_modules/bash-language-server/out/cli.js");
+    [bundled, Some(dev)].into_iter().flatten().find(|p| p.exists()).and_then(|p| p.canonicalize().ok())
+}
+
 /// The window may only show the app itself; links go to the browser.
 fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
     let is_app = url.scheme() == "tauri"
@@ -237,6 +244,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let _ = fsaccess::PYRIGHT_DIR.set(find_pyright(&handle));
+            let _ = fsaccess::BASH_LS.set(find_bash_ls(&handle));
             let nav = handle.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("Review Tool")

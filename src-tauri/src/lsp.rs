@@ -1,7 +1,7 @@
 //! Language servers spawned per PR. Rust only frames LSP messages: stdout ->
 //! Channel to the page, and `lsp_send` from the page -> stdin.
 use crate::exec::which;
-use crate::fsaccess::PYRIGHT_DIR;
+use crate::fsaccess::{BASH_LS, PYRIGHT_DIR};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,6 +29,7 @@ fn install_hint(lang: &str) -> &'static str {
         "cpp" => "xcode-select --install  (or: brew install llvm)",
         "python" => "pyright runs on Node.js: brew install node",
         "starlark" => "download starpls from https://github.com/withered-magic/starpls/releases and put it on your PATH",
+        "shell" => "bash-language-server runs on Node.js: brew install node",
         _ => "",
     }
 }
@@ -56,6 +57,10 @@ fn command(lang: &str, root: &Path) -> Result<(String, Vec<String>, Vec<(&'stati
             ("node".into(), vec![dir.join("langserver.index.js").to_string_lossy().into(), "--stdio".into()], vec![])
         }
         "starlark" => ("starpls".into(), vec!["server".into()], vec![]),
+        "shell" => {
+            let cli = BASH_LS.get().cloned().flatten().ok_or("bash-language-server isn't bundled with this build")?;
+            ("node".into(), vec![cli.to_string_lossy().into(), "start".into()], vec![])
+        }
         other => return Err(format!("unsupported language: {other}")),
     })
 }
