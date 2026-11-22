@@ -70,8 +70,8 @@ export class EditorHost {
   /** The editor showing the PR head (modified side of a diff, or the plain file editor). */
   /** Called with what the user is looking at whenever the selection or cursor moves. */
   onSelection?: (selection: EditorSelection) => void
-  /** "Ask Claude About Selection" from the editor's context menu. */
-  onAskClaude?: () => void
+  /** "Ask Agent About Selection" from the editor's context menu. */
+  onAskAgent?: () => void
   private lastSelection?: EditorSelection
 
   get selection(): EditorSelection | undefined {
@@ -107,14 +107,14 @@ export class EditorHost {
     editor.onDidChangeCursorSelection(report)
     editor.onDidFocusEditorText(report)
     editor.addAction({
-      id: 'review.askClaude',
-      label: 'Ask Claude About Selection',
+      id: 'review.askAgent',
+      label: 'Ask Agent About Selection',
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
       contextMenuGroupId: 'navigation',
       contextMenuOrder: 0.5,
       run: () => {
         report()
-        this.onAskClaude?.()
+        this.onAskAgent?.()
       }
     })
   }

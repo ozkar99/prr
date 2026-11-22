@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ClaudePanel, type ClaudePanelHandle } from './claude/ClaudePanel'
+import { AgentPanel, type AgentPanelHandle } from './agent/AgentPanel'
 import type { Checkout, LspLanguage, PRDetails, PRFile, ReviewThread } from '../../shared/types'
 import { EditorHost, type Location } from './editor/EditorHost'
 import { languagesFor, serverNames, startLanguageClient, type LanguageClientHandle } from './editor/lsp'
@@ -25,22 +25,26 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
   const [panelOpen, setPanelOpen] = useState(false)
   const [showOutdated, setShowOutdated] = useState(false)
   const [view, setView] = useState<'code' | 'conversation'>('code')
-  // Claude Code panel at the bottom: open state and height (remembered per machine).
-  const claudeRef = useRef<ClaudePanelHandle>(null)
-  const [claudeOpen, setClaudeOpen] = useState(false)
-  const [claudeHeight, setClaudeHeight] = useState(() => {
+  // Agent panel at the bottom (Claude Code by default): open state and height (remembered per machine).
+  const agentRef = useRef<AgentPanelHandle>(null)
+  const [agentName, setAgentName] = useState('Claude Code')
+  useEffect(() => {
+    void window.api.agentInfo().then((info) => setAgentName(info.name), () => {})
+  }, [])
+  const [agentOpen, setAgentOpen] = useState(false)
+  const [agentHeight, setAgentHeight] = useState(() => {
     try {
-      return Number(localStorage.getItem('claudePanelHeight')) || 300
+      return Number(localStorage.getItem('agentPanelHeight')) || 300
     } catch {
       return 300
     }
   })
-  const askClaude = () => {
-    setClaudeOpen(true)
-    claudeRef.current?.askAboutSelection(hostRef.current?.selection ?? null)
+  const askAgent = () => {
+    setAgentOpen(true)
+    agentRef.current?.askAboutSelection(hostRef.current?.selection ?? null)
   }
-  const askClaudeRef = useRef(askClaude)
-  askClaudeRef.current = askClaude
+  const askAgentRef = useRef(askAgent)
+  askAgentRef.current = askAgent
   /** Conversation item to scroll to; undefined means the top (description). */
   const [convTarget, setConvTarget] = useState<string>()
   const openConversation = (itemId?: string) => {
@@ -71,7 +75,7 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
       comments
     )
     hostRef.current = host
-    // Claude Code sees the PR and the selection through the app's MCP tools.
+    // The agent sees the PR and the selection through the app's MCP tools.
     void window.api.setReviewContext({
       root: checkout.root,
       mergeBase: checkout.mergeBase,
@@ -91,7 +95,7 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
       clearTimeout(selectionTimer)
       selectionTimer = setTimeout(() => void window.api.setSelection(sel), 120)
     }
-    host.onAskClaude = () => askClaudeRef.current()
+    host.onAskAgent = () => askAgentRef.current()
     if (import.meta.env.DEV) (window as unknown as { __host: EditorHost }).__host = host
     const first = pr.files.find((f) => f.status !== 'removed') ?? pr.files[0]
     if (first) void host.openDiff(first)
@@ -127,18 +131,18 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
   }, [pr, checkout, store])
 
   // Ctrl+- and the mouse back button go back, like VS Code. ⌘J toggles the
-  // Claude panel; ⌘L asks Claude about the selection.
+  // agent panel; ⌘L asks the agent about the selection.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const inTerminal = (e.target as HTMLElement | null)?.closest?.('.claude-panel')
+      const inTerminal = (e.target as HTMLElement | null)?.closest?.('.agent-panel')
       if (e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
         e.preventDefault()
         e.stopPropagation()
-        setClaudeOpen((open) => !open)
+        setAgentOpen((open) => !open)
       } else if (e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'l' && !inTerminal) {
         e.preventDefault()
         e.stopPropagation()
-        askClaudeRef.current()
+        askAgentRef.current()
       } else if (e.ctrlKey && e.key === '-' && !inTerminal) {
         e.preventDefault()
         void hostRef.current?.back()
@@ -206,8 +210,8 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
         <button className="link" onClick={() => void window.api.openExternal(pr.url)}>
           Open on GitHub
         </button>
-        <button className={`button ${claudeOpen ? 'toggled' : ''}`} onClick={() => setClaudeOpen(!claudeOpen)} title="Claude Code (⌘J)">
-          ✦ Claude
+        <button className={`button ${agentOpen ? 'toggled' : ''}`} onClick={() => setAgentOpen(!agentOpen)} title={`${agentName} (⌘J)`}>
+          ✦ {agentName}
         </button>
         <div className="review-button-wrap">
           <button className="button primary" onClick={() => setPanelOpen(!panelOpen)} disabled={!review.state}>
@@ -310,19 +314,19 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
         )}
         <div className="editor" ref={containerRef} />
       </main>
-      {claudeOpen && (
+      {agentOpen && (
         <div
           className="panel-splitter"
           onPointerDown={(e) => {
             const startY = e.clientY
-            const startH = claudeHeight
-            const move = (ev: PointerEvent) => setClaudeHeight(Math.min(Math.max(120, startH + startY - ev.clientY), window.innerHeight - 200))
+            const startH = agentHeight
+            const move = (ev: PointerEvent) => setAgentHeight(Math.min(Math.max(120, startH + startY - ev.clientY), window.innerHeight - 200))
             const up = () => {
               window.removeEventListener('pointermove', move)
               window.removeEventListener('pointerup', up)
-              setClaudeHeight((h) => {
+              setAgentHeight((h) => {
                 try {
-                  localStorage.setItem('claudePanelHeight', String(h))
+                  localStorage.setItem('agentPanelHeight', String(h))
                 } catch {}
                 return h
               })
@@ -332,17 +336,17 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
           }}
         />
       )}
-      {/* Stays mounted while hidden so the Claude session survives toggling. */}
-      <div className="claude-dock" style={{ height: claudeOpen ? claudeHeight : 0, display: claudeOpen ? undefined : 'none' }}>
-        <div className="claude-dock-header">
-          <span>✦ Claude Code</span>
+      {/* Stays mounted while hidden so the agent session survives toggling. */}
+      <div className="agent-dock" style={{ height: agentOpen ? agentHeight : 0, display: agentOpen ? undefined : 'none' }}>
+        <div className="agent-dock-header">
+          <span>✦ {agentName}</span>
           <span className="muted">in this PR's checkout · ⌘L asks about your selection</span>
           <span className="spacer" />
-          <button className="link" onClick={() => setClaudeOpen(false)} title="Hide (⌘J)">
+          <button className="link" onClick={() => setAgentOpen(false)} title="Hide (⌘J)">
             ✕
           </button>
         </div>
-        <ClaudePanel ref={claudeRef} pr={pr} checkout={checkout} visible={claudeOpen} />
+        <AgentPanel ref={agentRef} pr={pr} checkout={checkout} visible={agentOpen} />
       </div>
       </div>
     </div>

@@ -210,15 +210,15 @@ h3:where(.home *) { font-size: 12px; text-transform: uppercase; letter-spacing: 
 .markdown hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
 .markdown summary { cursor: pointer; }
 
-/* Main column: conversation/editor on top, Claude Code panel below */
+/* Main column: conversation/editor on top, agent panel below */
 .main-column { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .main-column > .conversation, .main-column > .editor-pane { flex: 1; min-height: 0; }
 .panel-splitter { height: 5px; flex-shrink: 0; cursor: row-resize; background: var(--border); border-top: 2px solid var(--bg); }
 .panel-splitter:hover { background: var(--accent); }
-.claude-dock { flex-shrink: 0; display: flex; flex-direction: column; background: var(--panel); min-height: 0; }
-.claude-dock-header { display: flex; align-items: center; gap: 10px; padding: 3px 12px; font-size: 12px; border-bottom: 1px solid var(--border); }
-.claude-panel { position: relative; flex: 1; min-height: 0; }
-.claude-terminal { position: absolute; inset: 4px 0 0 10px; }
-.claude-overlay { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; display: flex; gap: 10px; align-items: center; }
-.claude-overlay.error { color: var(--del); max-width: 80%; }
+.agent-dock { flex-shrink: 0; display: flex; flex-direction: column; background: var(--panel); min-height: 0; }
+.agent-dock-header { display: flex; align-items: center; gap: 10px; padding: 3px 12px; font-size: 12px; border-bottom: 1px solid var(--border); }
+.agent-panel { position: relative; flex: 1; min-height: 0; }
+.agent-terminal { position: absolute; inset: 4px 0 0 10px; }
+.agent-overlay { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; display: flex; gap: 10px; align-items: center; }
+.agent-overlay.error { color: var(--del); max-width: 80%; }
 .button.toggled { background: var(--active); border-color: var(--accent); }

@@ -1,3 +1,4 @@
+mod agent;
 mod devtools;
 mod exec;
 mod fsaccess;
@@ -138,47 +139,16 @@ fn set_selection(selection: Value) {
     mcp::set_selection(selection)
 }
 
-/// Starts Claude Code in the PR checkout, wired to the review-tool MCP server.
+/// Starts the coding agent (Claude Code unless ~/.review-tool-agent-command says otherwise) in the PR checkout.
 #[tauri::command]
-fn claude_start(app: AppHandle, root: String, pr_label: String, merge_base: String, cols: u16, rows: u16, on_data: Channel<InvokeResponseBody>) -> Result<u32, String> {
-    let claude = exec::which("claude")
-        .ok_or("Claude Code isn't installed: see https://docs.claude.com/en/docs/claude-code (curl -fsSL https://claude.ai/install.sh | bash)")?;
-    let (port, token) = mcp::ensure_started()?;
-    let mcp_config = serde_json::json!({
-        "mcpServers": { "review-tool": {
-            "type": "http",
-            "url": format!("http://127.0.0.1:{port}/mcp"),
-            "headers": { "Authorization": format!("Bearer {token}") }
-        }}
-    });
-    let system = format!(
-        "You are running inside Review Tool, a desktop app for reviewing GitHub pull requests. \
-         The working directory is a checkout of {pr_label} at the PR's head commit; the PR's changes are the diff against merge-base {merge_base}. \
-         The user is reviewing this PR, not editing it: answer questions about the code and the change, and don't modify files. \
-         When the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\"), call the review-tool get_selection tool first. \
-         Use get_pr for the PR description and changed files, and get_file_diff to see what changed in a file."
-    );
-    let args: Vec<String> = vec![
-        "--mcp-config".into(),
-        mcp_config.to_string(),
-        // PR code is untrusted: ignore the repo's own .mcp.json and .claude/settings.json (hooks, permissions).
-        "--strict-mcp-config".into(),
-        "--setting-sources".into(),
-        "user".into(),
-        "--append-system-prompt".into(),
-        system,
-        "--allowedTools".into(),
-        "mcp__review-tool".into(),
-        "Bash(git diff:*)".into(),
-        "Bash(git log:*)".into(),
-        "Bash(git show:*)".into(),
-        "Bash(git blame:*)".into(),
-        "--disallowedTools".into(),
-        "Edit".into(),
-        "Write".into(),
-        "NotebookEdit".into(),
-    ];
-    pty::spawn(app, &claude.to_string_lossy(), &args, &root, cols, rows, on_data)
+fn agent_start(app: AppHandle, root: String, pr_label: String, merge_base: String, cols: u16, rows: u16, on_data: Channel<InvokeResponseBody>) -> Result<u32, String> {
+    let launch = agent::launch(&pr_label, &merge_base, &root)?;
+    pty::spawn(app, &launch.program, &launch.args, &launch.env, &root, cols, rows, on_data)
+}
+
+#[tauri::command]
+fn agent_info() -> agent::AgentInfo {
+    agent::info()
 }
 
 #[tauri::command]
@@ -219,6 +189,11 @@ fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
         let _ = app.opener().open_url(url.as_str(), None::<&str>);
     }
     is_app
+}
+
+/// `review-tool --mcp-stdio <url> <token>` runs the stdio MCP bridge instead of the app.
+pub fn run_mcp_stdio_bridge(url: &str, token: &str) {
+    agent::run_stdio_bridge(url, token)
 }
 
 pub fn run() {
@@ -282,7 +257,8 @@ pub fn run() {
             take_launch_pr,
             set_review_context,
             set_selection,
-            claude_start,
+            agent_start,
+            agent_info,
             pty_write,
             pty_resize,
             pty_kill,

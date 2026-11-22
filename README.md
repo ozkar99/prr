@@ -107,6 +107,53 @@ When you're done, click **Finish review** (top right), add an optional summary, 
 **Comment**, **Approve** or **Request changes**. General comments on the Conversation page are
 the exception: they post immediately.
 
+### Asking an agent about the code
+
+**⌘J** (or **✦ Claude Code** in the header) opens a terminal panel at the bottom running a coding
+agent in the PR's checkout: Claude Code by default, using your existing Claude Code login. Select
+some code and press **⌘L** (or right-click → *Ask Agent About Selection*): the panel opens with
+`About <file> lines A-B: ` typed in, and you finish the question. Drag the divider to resize; the
+session keeps running while the panel is hidden.
+
+The agent knows what you're looking at through the app's MCP server, which has three tools:
+`get_selection` (file, side of the diff, lines, selected text), `get_pr` (title, description,
+changed files) and `get_file_diff` (one file's diff against the merge-base).
+
+Claude Code is started so that the PR can't configure it: the repo's `.mcp.json` and
+`.claude/settings.json` (hooks, permissions) are ignored, and Edit/Write are disabled since this
+is review, not editing.
+
+#### Using another agent (Codex, Gemini CLI, …)
+
+Put the command to run in `~/.review-tool-agent-command` (one shell command; blank lines and `#`
+comments are ignored). It runs in your login shell, in the PR checkout. Delete the file to go back
+to Claude Code. Click **Restart** in the panel, or reopen the PR, after changing it.
+
+Every agent gets these environment variables:
+
+| Variable | Contents |
+|---|---|
+| `REVIEW_TOOL_MCP_STDIO` | A stdio MCP server command (no arguments) that forwards to the app; for agents that only run stdio MCP servers |
+| `REVIEW_TOOL_MCP_URL`, `REVIEW_TOOL_MCP_TOKEN` | The HTTP MCP endpoint and its bearer token |
+| `REVIEW_TOOL_MCP_CONFIG` | `{"mcpServers": {...}}` JSON for the HTTP endpoint, the shape Claude Code's `--mcp-config` takes |
+| `REVIEW_TOOL_SELECTION_FILE` | A JSON file with the PR and current selection, kept up to date; for agents without MCP |
+| `REVIEW_TOOL_INSTRUCTIONS` | A paragraph explaining the review setup, to pass as the agent's system prompt or first message |
+| `REVIEW_TOOL_PR`, `REVIEW_TOOL_ROOT`, `REVIEW_TOOL_MERGE_BASE` | `owner/repo#N ("title")`, the checkout path, and the diff base commit |
+
+Examples (Codex and Gemini CLI weren't available to test these with; check their docs for the
+exact flags):
+
+```sh
+# Codex, with the review-tool MCP server over stdio
+codex -c "mcp_servers.review_tool.command=\"$REVIEW_TOOL_MCP_STDIO\""
+
+# Claude Code with a different model, keeping the app's context
+claude --model sonnet --mcp-config "$REVIEW_TOOL_MCP_CONFIG" --strict-mcp-config --setting-sources user --append-system-prompt "$REVIEW_TOOL_INSTRUCTIONS"
+```
+
+An agent configured this way runs with whatever permissions and project settings it normally
+uses; the protections above apply only to the built-in Claude Code default.
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -116,6 +163,7 @@ the exception: they post immediately.
 | A server chip says **failed** | Hover it to see the server's error output. |
 | C++ types are wrong or headers don't resolve | clangd needs `compile_commands.json` (see below). |
 | `review-tool` says the app isn't built | Run `npm run build` in the checkout. |
+| The agent panel says the agent exited | Its output is in the panel. Check the command in `~/.review-tool-agent-command`, then **Restart**. |
 
 ### C++ compile flags
 
@@ -167,3 +215,4 @@ Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one bar
 | VS Code services, grammars (incl. Starlark), disk-backed `file://` provider | `src/renderer/src/editor/` |
 | Diff / file editor, cross-file navigation, back stack | `src/renderer/src/editor/EditorHost.ts` |
 | Review threads in the editor, sidebar, conversation, review panel | `src/renderer/src/review/` |
+| Agent panel: launch command, MCP context server, terminal | `src-tauri/src/agent.rs`, `mcp.rs`, `pty.rs`, `src/renderer/src/agent/` |

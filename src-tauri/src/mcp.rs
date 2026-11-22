@@ -18,14 +18,32 @@ static CONTEXT: Mutex<Option<Context>> = Mutex::new(None);
 static SERVER: OnceLock<(u16, String)> = OnceLock::new();
 
 pub fn set_review(review: Value) {
-    let mut ctx = CONTEXT.lock().unwrap();
-    let ctx = ctx.get_or_insert_with(Context::default);
-    ctx.review = review;
-    ctx.selection = Value::Null;
+    {
+        let mut ctx = CONTEXT.lock().unwrap();
+        let ctx = ctx.get_or_insert_with(Context::default);
+        ctx.review = review;
+        ctx.selection = Value::Null;
+    }
+    write_selection_file();
 }
 
 pub fn set_selection(selection: Value) {
     CONTEXT.lock().unwrap().get_or_insert_with(Context::default).selection = selection;
+    write_selection_file();
+}
+
+/// Mirrors the selection to $REVIEW_TOOL_SELECTION_FILE for agents without MCP.
+fn write_selection_file() {
+    let review = review();
+    let value = json!({
+        "pr": if review.is_null() { Value::Null } else { json!({ "repo": review["pr"]["repo"], "number": review["pr"]["number"], "title": review["pr"]["title"] }) },
+        "selection": selection(),
+    });
+    let path = crate::agent::selection_file();
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, serde_json::to_vec_pretty(&value).unwrap_or_default()).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
 }
 
 fn review() -> Value {

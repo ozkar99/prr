@@ -7,7 +7,9 @@ export function parsePRRef(input: string): PRRef | undefined {
   return m ? { owner: m[1], repo: m[2], number: Number(m[3]) } : undefined
 }
 
-/** The open PR, as Claude Code sees it through the get_pr / get_file_diff tools. */
+export type AgentInfo = { name: string; command: string | null; configPath: string }
+
+/** The open PR, as the agent sees it through the get_pr / get_file_diff tools. */
 export type ReviewContext = {
   root: string
   mergeBase: string
@@ -23,7 +25,7 @@ export type ReviewContext = {
   }
 }
 
-/** What the user is looking at, as Claude Code sees it through get_selection. */
+/** What the user is looking at, as the agent sees it through get_selection. */
 export type EditorSelection = {
   /** Repo-relative path, or absolute for files outside the checkout (e.g. the Go stdlib). */
   path: string
@@ -166,12 +168,14 @@ export type Api = {
   submitReview(state: ReviewState, headSha: string, event: ReviewEvent, body: string): Promise<void>
   openExternal(url: string): Promise<void>
 
-  /** Tells the Claude Code integration which PR is open (null when none). */
+  /** Tells the agent integration which PR is open (null when none). */
   setReviewContext(review: ReviewContext | null): Promise<void>
-  /** Reports what the user has selected, for Claude Code's get_selection tool. */
+  /** Reports what the user has selected, for the agent's get_selection tool. */
   setSelection(selection: EditorSelection | null): Promise<void>
-  /** Starts Claude Code in a terminal; returns the terminal id. */
-  claudeStart(
+  /** The agent the panel runs: Claude Code, or the command in ~/.review-tool-agent-command. */
+  agentInfo(): Promise<AgentInfo>
+  /** Starts the agent in a terminal; returns the terminal id. */
+  agentStart(
     opts: { root: string; prLabel: string; mergeBase: string; cols: number; rows: number },
     onData: (bytes: Uint8Array) => void
   ): Promise<number>

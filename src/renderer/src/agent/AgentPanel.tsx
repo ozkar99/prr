@@ -5,8 +5,8 @@ import '@xterm/xterm/css/xterm.css'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { Checkout, EditorSelection, PRDetails } from '../../../shared/types'
 
-export type ClaudePanelHandle = {
-  /** Opens a prompt in Claude Code that points at the current selection; the user finishes the question. */
+export type AgentPanelHandle = {
+  /** Types a prompt into the agent that points at the current selection; the user finishes the question. */
   askAboutSelection(selection: EditorSelection | null): void
   focus(): void
 }
@@ -43,11 +43,12 @@ function selectionRef(sel: EditorSelection): string {
 }
 
 /**
- * Claude Code running in a terminal, started in the PR checkout. It learns what
- * the user is looking at through the app's MCP tools (get_selection etc.).
+ * The coding agent (Claude Code by default) running in a terminal, started in the
+ * PR checkout. It learns what the user is looking at through the app's MCP tools
+ * (get_selection etc.) or $REVIEW_TOOL_SELECTION_FILE.
  */
-export const ClaudePanel = forwardRef<ClaudePanelHandle, { pr: PRDetails; checkout: Checkout; visible: boolean }>(
-  function ClaudePanel({ pr, checkout, visible }, ref) {
+export const AgentPanel = forwardRef<AgentPanelHandle, { pr: PRDetails; checkout: Checkout; visible: boolean }>(
+  function AgentPanel({ pr, checkout, visible }, ref) {
     const hostRef = useRef<HTMLDivElement>(null)
     const termRef = useRef<Terminal>(undefined)
     const fitRef = useRef<FitAddon>(undefined)
@@ -80,7 +81,7 @@ export const ClaudePanel = forwardRef<ClaudePanelHandle, { pr: PRDetails; checko
       fitRef.current = fit
       setStatus('starting')
       try {
-        const id = await window.api.claudeStart(
+        const id = await window.api.agentStart(
           {
             root: checkout.root,
             prLabel: `${pr.owner}/${pr.repo}#${pr.number} ("${pr.title}")`,
@@ -97,7 +98,7 @@ export const ClaudePanel = forwardRef<ClaudePanelHandle, { pr: PRDetails; checko
         term.onData((data) => void window.api.ptyWrite(id, data).catch(() => {}))
         setStatus('running')
         if (pendingInput.current) {
-          // Type into Claude Code's prompt once it has finished drawing its UI
+          // Type into the agent's prompt once it has finished drawing its UI
           // (output has gone quiet), or after 10s at the latest.
           const text = pendingInput.current
           pendingInput.current = undefined
@@ -177,18 +178,18 @@ export const ClaudePanel = forwardRef<ClaudePanelHandle, { pr: PRDetails; checko
     )
 
     return (
-      <div className="claude-panel">
-        <div className="claude-terminal" ref={hostRef} />
+      <div className="agent-panel">
+        <div className="agent-terminal" ref={hostRef} />
         {status === 'exited' && (
-          <div className="claude-overlay">
-            Claude Code exited.{' '}
+          <div className="agent-overlay">
+            The agent exited.{' '}
             <button className="button primary" onClick={() => void start()}>
               Restart
             </button>
           </div>
         )}
         {typeof status === 'object' && (
-          <div className="claude-overlay error">
+          <div className="agent-overlay error">
             {status.error}{' '}
             <button className="button" onClick={() => void start()}>
               Retry

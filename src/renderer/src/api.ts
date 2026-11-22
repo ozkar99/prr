@@ -53,10 +53,11 @@ const api: Api = {
 
   setReviewContext: (review) => call('set_review_context', { review }),
   setSelection: (selection) => call('set_selection', { selection }),
-  async claudeStart(opts, onData) {
+  agentInfo: () => call('agent_info'),
+  async agentStart(opts, onData) {
     const channel = new Channel<ArrayBuffer>()
     channel.onmessage = (bytes) => onData(new Uint8Array(bytes))
-    return call<number>('claude_start', { ...opts, onData: channel })
+    return call<number>('agent_start', { ...opts, onData: channel })
   },
   ptyWrite: (id, data) => call('pty_write', { id, data }),
   ptyResize: (id, cols, rows) => call('pty_resize', { id, cols, rows }),

@@ -27,6 +27,7 @@ pub fn spawn(
     app: AppHandle,
     program: &str,
     args: &[String],
+    env: &[(String, String)],
     cwd: &str,
     cols: u16,
     rows: u16,
@@ -40,6 +41,9 @@ pub fn spawn(
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
     // If the app itself was started from inside a Claude Code session, don't let
     // the embedded one think it's that session's child (it would, e.g., stop saving transcripts).
     for (key, _) in std::env::vars() {
