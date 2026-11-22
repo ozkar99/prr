@@ -2,7 +2,7 @@ import { createModelReference, type ITextFileEditorModel } from '@codingame/mona
 import * as monaco from '@codingame/monaco-vscode-editor-api'
 import type { IReference } from '@codingame/monaco-vscode-editor-service-override'
 import * as vscode from 'vscode'
-import type { Checkout, DiffSide, PRDetails, PRFile } from '../../../shared/types'
+import type { Checkout, DiffSide, EditorSelection, PRDetails, PRFile } from '../../../shared/types'
 import type { CommentController } from '../review/CommentController'
 import { setOpenEditorHandler } from './services'
 
@@ -68,6 +68,57 @@ export class EditorHost {
   }
 
   /** The editor showing the PR head (modified side of a diff, or the plain file editor). */
+  /** Called with what the user is looking at whenever the selection or cursor moves. */
+  onSelection?: (selection: EditorSelection) => void
+  /** "Ask Claude About Selection" from the editor's context menu. */
+  onAskClaude?: () => void
+  private lastSelection?: EditorSelection
+
+  get selection(): EditorSelection | undefined {
+    return this.lastSelection
+  }
+
+  private watchSelection(editor: monaco.editor.IStandaloneCodeEditor, side: EditorSelection['side']): void {
+    const report = () => {
+      const model = editor.getModel()
+      const sel = editor.getSelection()
+      if (!model || !sel) return
+      // The left side's model has a pr-base: URI; name it by the file it shows.
+      const loc = this.current
+      const path =
+        side === 'old' && loc?.kind === 'diff'
+          ? (loc.file.previousPath ?? loc.file.path)
+          : (this.relativePath(model.uri.fsPath) ?? model.uri.fsPath)
+      const cursorOnly = sel.isEmpty()
+      const text = cursorOnly ? model.getLineContent(sel.startLineNumber) : model.getValueInRange(sel)
+      // A selection ending at column 1 doesn't really include that line.
+      const endLine = !cursorOnly && sel.endColumn === 1 && sel.endLineNumber > sel.startLineNumber ? sel.endLineNumber - 1 : sel.endLineNumber
+      this.lastSelection = {
+        path,
+        side,
+        changedInPR: this.filesByPath.has(path),
+        startLine: sel.startLineNumber,
+        endLine,
+        cursorOnly,
+        text: text.length > 20000 ? text.slice(0, 20000) + '\n… (truncated)' : text
+      }
+      this.onSelection?.(this.lastSelection)
+    }
+    editor.onDidChangeCursorSelection(report)
+    editor.onDidFocusEditorText(report)
+    editor.addAction({
+      id: 'review.askClaude',
+      label: 'Ask Claude About Selection',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 0.5,
+      run: () => {
+        report()
+        this.onAskClaude?.()
+      }
+    })
+  }
+
   get activeEditor(): monaco.editor.ICodeEditor | undefined {
     return this.diffEditor?.getModifiedEditor() ?? this.codeEditor
   }
@@ -190,6 +241,8 @@ export class EditorHost {
         renderMarginRevertIcon: false,
         hideUnchangedRegions: { enabled: false }
       })
+      this.watchSelection(this.diffEditor.getOriginalEditor(), 'old')
+      this.watchSelection(this.diffEditor.getModifiedEditor(), 'new')
     }
     this.diffEditor.setModel({ original, modified })
     this.releaseModels()
@@ -230,6 +283,7 @@ export class EditorHost {
     this.diffEditor = undefined
     if (!this.codeEditor) {
       this.codeEditor = monaco.editor.create(this.container, { readOnly: true, automaticLayout: true })
+      this.watchSelection(this.codeEditor, 'new')
     }
     this.codeEditor.setModel(ref.object.textEditorModel!)
     this.releaseModels()

@@ -50,6 +50,18 @@ const api: Api = {
   submitReview: (state, headSha, event, body) => call('submit_review', { state: handle(state), headSha, event, body }),
 
   openExternal: (url) => call('open_url', { url }),
+
+  setReviewContext: (review) => call('set_review_context', { review }),
+  setSelection: (selection) => call('set_selection', { selection }),
+  async claudeStart(opts, onData) {
+    const channel = new Channel<ArrayBuffer>()
+    channel.onmessage = (bytes) => onData(new Uint8Array(bytes))
+    return call<number>('claude_start', { ...opts, onData: channel })
+  },
+  ptyWrite: (id, data) => call('pty_write', { id, data }),
+  ptyResize: (id, cols, rows) => call('pty_resize', { id, cols, rows }),
+  ptyKill: (id) => call('pty_kill', { id }),
+  onPtyExit: (cb) => subscribe('pty:exit', cb),
   takeLaunchPR: () => call('take_launch_pr'),
   onOpenPR: (cb) => subscribe('app:openPR', cb),
   onProgress: (cb) => subscribe('progress', cb),

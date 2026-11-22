@@ -4,12 +4,14 @@ mod fsaccess;
 mod git;
 mod github;
 mod lsp;
+mod mcp;
+mod pty;
 mod types;
 
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::ipc::{Channel, Response};
+use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, TitleBarStyle, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -122,6 +124,78 @@ fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
+// ---- Claude Code panel ----
+
+/// The page reports the open PR (and its checkout) and the editor selection;
+/// the MCP server hands them to Claude Code.
+#[tauri::command]
+fn set_review_context(review: Value) {
+    mcp::set_review(review)
+}
+
+#[tauri::command]
+fn set_selection(selection: Value) {
+    mcp::set_selection(selection)
+}
+
+/// Starts Claude Code in the PR checkout, wired to the review-tool MCP server.
+#[tauri::command]
+fn claude_start(app: AppHandle, root: String, pr_label: String, merge_base: String, cols: u16, rows: u16, on_data: Channel<InvokeResponseBody>) -> Result<u32, String> {
+    let claude = exec::which("claude")
+        .ok_or("Claude Code isn't installed: see https://docs.claude.com/en/docs/claude-code (curl -fsSL https://claude.ai/install.sh | bash)")?;
+    let (port, token) = mcp::ensure_started()?;
+    let mcp_config = serde_json::json!({
+        "mcpServers": { "review-tool": {
+            "type": "http",
+            "url": format!("http://127.0.0.1:{port}/mcp"),
+            "headers": { "Authorization": format!("Bearer {token}") }
+        }}
+    });
+    let system = format!(
+        "You are running inside Review Tool, a desktop app for reviewing GitHub pull requests. \
+         The working directory is a checkout of {pr_label} at the PR's head commit; the PR's changes are the diff against merge-base {merge_base}. \
+         The user is reviewing this PR, not editing it: answer questions about the code and the change, and don't modify files. \
+         When the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\"), call the review-tool get_selection tool first. \
+         Use get_pr for the PR description and changed files, and get_file_diff to see what changed in a file."
+    );
+    let args: Vec<String> = vec![
+        "--mcp-config".into(),
+        mcp_config.to_string(),
+        // PR code is untrusted: ignore the repo's own .mcp.json and .claude/settings.json (hooks, permissions).
+        "--strict-mcp-config".into(),
+        "--setting-sources".into(),
+        "user".into(),
+        "--append-system-prompt".into(),
+        system,
+        "--allowedTools".into(),
+        "mcp__review-tool".into(),
+        "Bash(git diff:*)".into(),
+        "Bash(git log:*)".into(),
+        "Bash(git show:*)".into(),
+        "Bash(git blame:*)".into(),
+        "--disallowedTools".into(),
+        "Edit".into(),
+        "Write".into(),
+        "NotebookEdit".into(),
+    ];
+    pty::spawn(app, &claude.to_string_lossy(), &args, &root, cols, rows, on_data)
+}
+
+#[tauri::command]
+fn pty_write(id: u32, data: String) -> Result<(), String> {
+    pty::write(id, &data)
+}
+
+#[tauri::command]
+fn pty_resize(id: u32, cols: u16, rows: u16) -> Result<(), String> {
+    pty::resize(id, cols, rows)
+}
+
+#[tauri::command]
+fn pty_kill(id: u32) {
+    pty::kill(id)
+}
+
 #[tauri::command]
 fn take_launch_pr(launch: State<LaunchPR>) -> Option<PRRef> {
     launch.0.lock().unwrap().take()
@@ -169,6 +243,7 @@ pub fn run() {
             // A reload orphans the page's language clients; stop their servers.
             if payload.event() == PageLoadEvent::Started {
                 tauri::async_runtime::spawn(lsp::stop_all());
+                pty::kill_all();
             }
         })
         .setup(|app| {
@@ -205,6 +280,12 @@ pub fn run() {
             submit_review,
             open_url,
             take_launch_pr,
+            set_review_context,
+            set_selection,
+            claude_start,
+            pty_write,
+            pty_resize,
+            pty_kill,
             devtools::debug_result
         ])
         .build(tauri::generate_context!())
@@ -212,6 +293,7 @@ pub fn run() {
 
     app.run(|_app, event| {
         if let RunEvent::Exit = event {
+            pty::kill_all();
             tauri::async_runtime::block_on(lsp::stop_all());
         }
     });

@@ -7,6 +7,36 @@ export function parsePRRef(input: string): PRRef | undefined {
   return m ? { owner: m[1], repo: m[2], number: Number(m[3]) } : undefined
 }
 
+/** The open PR, as Claude Code sees it through the get_pr / get_file_diff tools. */
+export type ReviewContext = {
+  root: string
+  mergeBase: string
+  pr: {
+    repo: string
+    number: number
+    title: string
+    url: string
+    author: string
+    baseBranch: string
+    description: string
+    files: { path: string; status: string; additions: number; deletions: number }[]
+  }
+}
+
+/** What the user is looking at, as Claude Code sees it through get_selection. */
+export type EditorSelection = {
+  /** Repo-relative path, or absolute for files outside the checkout (e.g. the Go stdlib). */
+  path: string
+  /** 'new' = PR head, 'old' = before the PR (left side of a diff). */
+  side: 'new' | 'old'
+  changedInPR: boolean
+  startLine: number
+  endLine: number
+  /** True when nothing is selected; `text` is then the cursor line. */
+  cursorOnly: boolean
+  text: string
+}
+
 export type PRSummary = {
   owner: string
   repo: string
@@ -135,6 +165,20 @@ export type Api = {
   setResolved(threadId: string, resolved: boolean): Promise<void>
   submitReview(state: ReviewState, headSha: string, event: ReviewEvent, body: string): Promise<void>
   openExternal(url: string): Promise<void>
+
+  /** Tells the Claude Code integration which PR is open (null when none). */
+  setReviewContext(review: ReviewContext | null): Promise<void>
+  /** Reports what the user has selected, for Claude Code's get_selection tool. */
+  setSelection(selection: EditorSelection | null): Promise<void>
+  /** Starts Claude Code in a terminal; returns the terminal id. */
+  claudeStart(
+    opts: { root: string; prLabel: string; mergeBase: string; cols: number; rows: number },
+    onData: (bytes: Uint8Array) => void
+  ): Promise<number>
+  ptyWrite(id: number, data: string): Promise<void>
+  ptyResize(id: number, cols: number, rows: number): Promise<void>
+  ptyKill(id: number): Promise<void>
+  onPtyExit(cb: (id: number) => void): () => void
   /** A PR the app was launched with (`review-tool <pr>`), consumed once. */
   takeLaunchPR(): Promise<PRRef | null>
   /** PRs sent by later `review-tool <pr>` calls while the app is running. */

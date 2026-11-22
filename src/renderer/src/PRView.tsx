@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ClaudePanel, type ClaudePanelHandle } from './claude/ClaudePanel'
 import type { Checkout, LspLanguage, PRDetails, PRFile, ReviewThread } from '../../shared/types'
 import { EditorHost, type Location } from './editor/EditorHost'
 import { languagesFor, serverNames, startLanguageClient, type LanguageClientHandle } from './editor/lsp'
@@ -24,6 +25,22 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
   const [panelOpen, setPanelOpen] = useState(false)
   const [showOutdated, setShowOutdated] = useState(false)
   const [view, setView] = useState<'code' | 'conversation'>('code')
+  // Claude Code panel at the bottom: open state and height (remembered per machine).
+  const claudeRef = useRef<ClaudePanelHandle>(null)
+  const [claudeOpen, setClaudeOpen] = useState(false)
+  const [claudeHeight, setClaudeHeight] = useState(() => {
+    try {
+      return Number(localStorage.getItem('claudePanelHeight')) || 300
+    } catch {
+      return 300
+    }
+  })
+  const askClaude = () => {
+    setClaudeOpen(true)
+    claudeRef.current?.askAboutSelection(hostRef.current?.selection ?? null)
+  }
+  const askClaudeRef = useRef(askClaude)
+  askClaudeRef.current = askClaude
   /** Conversation item to scroll to; undefined means the top (description). */
   const [convTarget, setConvTarget] = useState<string>()
   const openConversation = (itemId?: string) => {
@@ -54,6 +71,27 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
       comments
     )
     hostRef.current = host
+    // Claude Code sees the PR and the selection through the app's MCP tools.
+    void window.api.setReviewContext({
+      root: checkout.root,
+      mergeBase: checkout.mergeBase,
+      pr: {
+        repo: `${pr.owner}/${pr.repo}`,
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        author: pr.author,
+        baseBranch: pr.baseRef,
+        description: pr.body,
+        files: pr.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions }))
+      }
+    })
+    let selectionTimer: ReturnType<typeof setTimeout> | undefined
+    host.onSelection = (sel) => {
+      clearTimeout(selectionTimer)
+      selectionTimer = setTimeout(() => void window.api.setSelection(sel), 120)
+    }
+    host.onAskClaude = () => askClaudeRef.current()
     if (import.meta.env.DEV) (window as unknown as { __host: EditorHost }).__host = host
     const first = pr.files.find((f) => f.status !== 'removed') ?? pr.files[0]
     if (first) void host.openDiff(first)
@@ -81,15 +119,27 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
       unmounted = true
       offExit()
       for (const h of handles) void h.dispose()
+      clearTimeout(selectionTimer)
+      void window.api.setReviewContext(null)
       host.dispose()
       hostRef.current = undefined
     }
   }, [pr, checkout, store])
 
-  // Ctrl+- and the mouse back button go back, like VS Code.
+  // Ctrl+- and the mouse back button go back, like VS Code. ⌘J toggles the
+  // Claude panel; ⌘L asks Claude about the selection.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === '-') {
+      const inTerminal = (e.target as HTMLElement | null)?.closest?.('.claude-panel')
+      if (e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
+        e.preventDefault()
+        e.stopPropagation()
+        setClaudeOpen((open) => !open)
+      } else if (e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'l' && !inTerminal) {
+        e.preventDefault()
+        e.stopPropagation()
+        askClaudeRef.current()
+      } else if (e.ctrlKey && e.key === '-' && !inTerminal) {
         e.preventDefault()
         void hostRef.current?.back()
       }
@@ -155,6 +205,9 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
         ))}
         <button className="link" onClick={() => void window.api.openExternal(pr.url)}>
           Open on GitHub
+        </button>
+        <button className={`button ${claudeOpen ? 'toggled' : ''}`} onClick={() => setClaudeOpen(!claudeOpen)} title="Claude Code (⌘J)">
+          ✦ Claude
         </button>
         <div className="review-button-wrap">
           <button className="button primary" onClick={() => setPanelOpen(!panelOpen)} disabled={!review.state}>
@@ -227,6 +280,7 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
         )}
       </aside>
 
+      <div className="main-column">
       {view === 'conversation' && <Conversation pr={pr} store={store} />}
       <main className="editor-pane" style={view === 'conversation' ? { display: 'none' } : undefined}>
         <div className="breadcrumb">
@@ -256,6 +310,41 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
         )}
         <div className="editor" ref={containerRef} />
       </main>
+      {claudeOpen && (
+        <div
+          className="panel-splitter"
+          onPointerDown={(e) => {
+            const startY = e.clientY
+            const startH = claudeHeight
+            const move = (ev: PointerEvent) => setClaudeHeight(Math.min(Math.max(120, startH + startY - ev.clientY), window.innerHeight - 200))
+            const up = () => {
+              window.removeEventListener('pointermove', move)
+              window.removeEventListener('pointerup', up)
+              setClaudeHeight((h) => {
+                try {
+                  localStorage.setItem('claudePanelHeight', String(h))
+                } catch {}
+                return h
+              })
+            }
+            window.addEventListener('pointermove', move)
+            window.addEventListener('pointerup', up)
+          }}
+        />
+      )}
+      {/* Stays mounted while hidden so the Claude session survives toggling. */}
+      <div className="claude-dock" style={{ height: claudeOpen ? claudeHeight : 0, display: claudeOpen ? undefined : 'none' }}>
+        <div className="claude-dock-header">
+          <span>✦ Claude Code</span>
+          <span className="muted">in this PR's checkout · ⌘L asks about your selection</span>
+          <span className="spacer" />
+          <button className="link" onClick={() => setClaudeOpen(false)} title="Hide (⌘J)">
+            ✕
+          </button>
+        </div>
+        <ClaudePanel ref={claudeRef} pr={pr} checkout={checkout} visible={claudeOpen} />
+      </div>
+      </div>
     </div>
   )
 }
