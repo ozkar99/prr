@@ -57,6 +57,10 @@ export class ReviewStore {
     return this.mutate((s) => window.api.reply(s, this.pr.headSha, threadId, body))
   }
 
+  addPRComment(body: string) {
+    return this.mutate((s) => window.api.addPRComment(s.prNodeId, body))
+  }
+
   deleteComment(commentId: string) {
     return this.mutate(() => window.api.deleteComment(commentId))
   }

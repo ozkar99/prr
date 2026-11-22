@@ -4,12 +4,20 @@ import type { DiffSide, PRFile } from '../../../shared/types'
 import type { ReviewStore } from './ReviewStore'
 import { ThreadZone, type ComposerRequest } from './ThreadZone'
 
+/**
+ * A thread area, built like VS Code's ZoneWidget: an empty view zone reserves
+ * space between lines, and an overlay widget (above the text layer, so it can
+ * take clicks and keys) holds the content and follows the zone's position.
+ */
 type Zone = {
   id: string
   zone: monaco.editor.IViewZone
+  widget: monaco.editor.IOverlayWidget
   root: Root
   observer: ResizeObserver
 }
+
+let widgetSeq = 0
 
 /** Lines GitHub accepts comments on; without patch info, allow any line and let the API decide. */
 function isCommentable(file: PRFile, side: DiffSide, line: number): boolean {
@@ -72,7 +80,7 @@ class SideController {
         }
       }),
       editor.onDidLayoutChange(() => {
-        for (const z of this.zones.values()) this.fitWidth(z.zone.domNode)
+        for (const z of this.zones.values()) this.fitWidth(z.widget.getDomNode())
       }),
       { dispose: store.subscribe(() => this.sync()) }
     )
@@ -127,32 +135,54 @@ class SideController {
   }
 
   private createZone(accessor: monaco.editor.IViewZoneChangeAccessor, line: number): Zone {
-    const dom = document.createElement('div')
-    dom.className = 'thread-zone'
-    this.fitWidth(dom)
-    // Keep the editor from treating clicks/keys in the thread as editor input.
-    for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'keydown', 'keyup', 'keypress', 'contextmenu', 'focusin']) {
-      dom.addEventListener(type, (e) => e.stopPropagation())
+    const overlay = document.createElement('div')
+    overlay.className = 'thread-zone'
+    overlay.style.top = '-100000px' // until Monaco reports the zone's position
+    this.fitWidth(overlay)
+    // Keep the editor's own handlers (selection, keybindings) out of the thread UI.
+    for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'keydown', 'keyup', 'keypress', 'contextmenu', 'paste', 'copy', 'cut']) {
+      overlay.addEventListener(type, (e) => e.stopPropagation())
     }
-    const zone: monaco.editor.IViewZone = { afterLineNumber: line, heightInPx: 60, domNode: dom, suppressMouseDown: true }
+    const widget: monaco.editor.IOverlayWidget = {
+      getId: () => `review.thread.${++widgetSeq}`,
+      getDomNode: () => overlay,
+      getPosition: () => null // positioned by hand from the zone's top
+    }
+    const widgetId = widget.getId()
+    widget.getId = () => widgetId
+    this.editor.addOverlayWidget(widget)
+
+    const zone: monaco.editor.IViewZone = {
+      afterLineNumber: line,
+      heightInPx: 60,
+      domNode: document.createElement('div'),
+      // Monaco reports the zone's top in viewport coordinates, or far off-screen when scrolled out.
+      onDomNodeTop: (top) => {
+        overlay.style.top = `${top}px`
+        // Overlay widgets draw above the sticky-scroll header; hide the part that slides under it.
+        const sticky = this.editor.getDomNode()?.querySelector<HTMLElement>('.sticky-widget')
+        const hidden = (sticky?.offsetHeight ?? 0) - top
+        overlay.style.clipPath = hidden > 0 ? `inset(${hidden}px 0 0 0)` : ''
+      }
+    }
     const id = accessor.addZone(zone)
-    const observer = new ResizeObserver((entries) => {
-      // Zero while the zone is scrolled out of view (Monaco hides it); keep the last real height.
-      const height = (entries[0]?.target as HTMLElement | undefined)?.offsetHeight ?? 0
-      if (height && Math.abs(height + 8 - (zone.heightInPx ?? 0)) > 1) {
-        zone.heightInPx = height + 8
+    const observer = new ResizeObserver(() => {
+      const height = overlay.offsetHeight
+      if (height && Math.abs(height - (zone.heightInPx ?? 0)) > 1) {
+        zone.heightInPx = height
         this.editor.changeViewZones((a) => a.layoutZone(id))
       }
     })
-    const root = createRoot(dom)
-    return { id, zone, root, observer }
+    observer.observe(overlay)
+    return { id, zone, widget, root: createRoot(overlay), observer }
   }
 
-  /** Zones are as wide as the longest line by default; keep them within the visible area. */
-  private fitWidth(dom: HTMLElement): void {
+  /** Overlay widgets aren't laid out by Monaco when unpositioned; place it over the text area. */
+  private fitWidth(overlay: HTMLElement): void {
     const layout = this.editor.getLayoutInfo()
-    // Monaco owns the zone's own width, so size the content through a CSS variable.
-    dom.style.setProperty('--zone-width', `${Math.max(200, layout.contentWidth - layout.verticalScrollbarWidth - layout.minimap.minimapWidth)}px`)
+    overlay.style.position = 'absolute'
+    overlay.style.left = `${layout.contentLeft}px`
+    overlay.style.width = `${Math.max(200, layout.contentWidth - layout.verticalScrollbarWidth - layout.minimap.minimapWidth)}px`
   }
 
   private render(line: number, z: Zone): void {
@@ -164,13 +194,13 @@ class SideController {
         line={line}
         composer={this.composers.get(line)}
         onCloseComposer={() => this.closeComposer(line)}
-        measureRef={(el) => el && z.observer.observe(el)}
       />
     )
   }
 
   private destroy(z: Zone): void {
     z.observer.disconnect()
+    this.editor.removeOverlayWidget(z.widget)
     // Unmount after the current render pass; React warns on synchronous unmount during render.
     queueMicrotask(() => z.root.unmount())
   }

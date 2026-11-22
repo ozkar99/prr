@@ -14,6 +14,7 @@ const api: Api = {
   reviewState: (owner, repo, number) => ipcRenderer.invoke('gh:reviewState', owner, repo, number),
   addThread: (state, sha, t) => ipcRenderer.invoke('gh:addThread', state, sha, t),
   reply: (state, sha, threadId, body) => ipcRenderer.invoke('gh:reply', state, sha, threadId, body),
+  addPRComment: (prNodeId, body) => ipcRenderer.invoke('gh:addPRComment', prNodeId, body),
   deleteComment: (id) => ipcRenderer.invoke('gh:deleteComment', id),
   setResolved: (id, resolved) => ipcRenderer.invoke('gh:setResolved', id, resolved),
   submitReview: (state, sha, event, body) => ipcRenderer.invoke('gh:submitReview', state, sha, event, body),

@@ -52,12 +52,27 @@ export type ReviewThread = {
   comments: ReviewComment[]
 }
 
+/** Something in the PR's conversation that isn't attached to a file. */
+export type ConversationItem = {
+  kind: 'comment' | 'review'
+  id: string
+  author: string
+  authorAvatar: string
+  body: string
+  createdAt: string
+  url: string
+  /** Review outcome, for kind 'review'. */
+  reviewState?: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED'
+}
+
 export type ReviewState = {
   prNodeId: string
   viewer: string
   /** The viewer's unsubmitted review, if any. */
   pendingReviewId?: string
   threads: ReviewThread[]
+  /** General PR comments and submitted reviews, oldest first. */
+  conversation: ConversationItem[]
 }
 
 export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'
@@ -106,6 +121,8 @@ export type Api = {
   addThread(state: ReviewState, headSha: string, thread: NewThread): Promise<void>
   reply(state: ReviewState, headSha: string, threadId: string, body: string): Promise<void>
   deleteComment(commentId: string): Promise<void>
+  /** Posts a general (not file-attached) comment on the PR. Publishes immediately. */
+  addPRComment(prNodeId: string, body: string): Promise<void>
   setResolved(threadId: string, resolved: boolean): Promise<void>
   submitReview(state: ReviewState, headSha: string, event: ReviewEvent, body: string): Promise<void>
   openExternal(url: string): Promise<void>

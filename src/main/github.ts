@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest'
-import type { CommentableRanges, FileStatus, NewThread, PRDetails, PRSummary, ReviewEvent, ReviewState, ReviewThread } from '../shared/types'
+import type { CommentableRanges, ConversationItem, FileStatus, NewThread, PRDetails, PRSummary, ReviewEvent, ReviewState, ReviewThread } from '../shared/types'
 import { run } from './exec'
 
 let client: Octokit | undefined
@@ -106,6 +106,20 @@ type ThreadNode = {
   }
 }
 
+const conversationFields = 'id body createdAt url author { login avatarUrl }'
+
+type ConversationNode = { id: string; body: string; createdAt: string; url: string; author: { login: string; avatarUrl: string } | null }
+
+const toConversationItem = (kind: ConversationItem['kind'], c: ConversationNode): ConversationItem => ({
+  kind,
+  id: c.id,
+  author: c.author?.login ?? 'ghost',
+  authorAvatar: c.author?.avatarUrl ?? '',
+  body: c.body,
+  createdAt: c.createdAt,
+  url: c.url
+})
+
 const toThread = (t: ThreadNode): ReviewThread => ({
   id: t.id,
   path: t.path,
@@ -140,16 +154,22 @@ export async function reviewState(owner: string, repo: string, number: number): 
         pullRequest: {
           id: string
           reviews: { nodes: { id: string; viewerDidAuthor: boolean }[] }
+          comments: { nodes: ConversationNode[] }
+          submitted: { nodes: (ConversationNode & { state: string })[] }
           reviewThreads: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ThreadNode[] }
         }
       }
     } = await octokit.graphql(
-      `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+      `query($owner: String!, $repo: String!, $number: Int!, $after: String, $first: Boolean!) {
         viewer { login }
         repository(owner: $owner, name: $repo) {
           pullRequest(number: $number) {
             id
             reviews(states: PENDING, first: 20) { nodes { id viewerDidAuthor } }
+            comments(last: 100) @include(if: $first) { nodes { ${conversationFields} } }
+            submitted: reviews(states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED], last: 100) @include(if: $first) {
+              nodes { state ${conversationFields} }
+            }
             reviewThreads(first: 100, after: $after) {
               pageInfo { hasNextPage endCursor }
               nodes { ${threadFields} }
@@ -157,13 +177,20 @@ export async function reviewState(owner: string, repo: string, number: number): 
           }
         }
       }`,
-      { owner, repo, number, after }
+      { owner, repo, number, after, first: !base }
     )
     const pr = res.repository.pullRequest
     base ??= {
       prNodeId: pr.id,
       viewer: res.viewer.login,
-      pendingReviewId: pr.reviews.nodes.find((r) => r.viewerDidAuthor)?.id
+      pendingReviewId: pr.reviews.nodes.find((r) => r.viewerDidAuthor)?.id,
+      conversation: [
+        ...pr.comments.nodes.map((c) => toConversationItem('comment', c)),
+        // A review with no summary text only carries inline comments, which show under files.
+        ...pr.submitted.nodes
+          .filter((r) => r.body.trim() || r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED')
+          .map((r) => ({ ...toConversationItem('review', r), reviewState: r.state as ConversationItem['reviewState'] }))
+      ].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     }
     threads.push(...pr.reviewThreads.nodes.map(toThread))
     after = pr.reviewThreads.pageInfo.hasNextPage ? pr.reviewThreads.pageInfo.endCursor : null
@@ -232,6 +259,13 @@ export async function reply(state: ReviewState, headSha: string, threadId: strin
 
 export async function deleteComment(id: string): Promise<void> {
   await (await gh()).graphql(`mutation($id: ID!) { deletePullRequestReviewComment(input: { id: $id }) { clientMutationId } }`, { id })
+}
+
+export async function addPRComment(prNodeId: string, body: string): Promise<void> {
+  await (await gh()).graphql(`mutation($id: ID!, $body: String!) { addComment(input: { subjectId: $id, body: $body }) { clientMutationId } }`, {
+    id: prNodeId,
+    body
+  })
 }
 
 export async function setResolved(threadId: string, resolved: boolean): Promise<void> {

@@ -4,7 +4,7 @@ import type { LspLanguage, NewThread, PRDetails, ReviewEvent, ReviewState } from
 import { augmentPath } from './exec'
 import { fsRead, fsReaddir, fsStat } from './fsaccess'
 import { checkout, readAtCommit } from './git'
-import { addThread, deleteComment, getPR, reply, reviewQueue, reviewState, setResolved, submitReview } from './github'
+import { addPRComment, addThread, deleteComment, getPR, reply, reviewQueue, reviewState, setResolved, submitReview } from './github'
 import { startServer, stopAllServers, stopServer } from './lsp'
 
 augmentPath()
@@ -54,6 +54,7 @@ app.whenReady().then(() => {
   ipcMain.handle('gh:reviewState', (_e, owner: string, repo: string, number: number) => reviewState(owner, repo, number))
   ipcMain.handle('gh:addThread', (_e, state: ReviewState, sha: string, t: NewThread) => addThread(state, sha, t))
   ipcMain.handle('gh:reply', (_e, state: ReviewState, sha: string, threadId: string, body: string) => reply(state, sha, threadId, body))
+  ipcMain.handle('gh:addPRComment', (_e, prNodeId: string, body: string) => addPRComment(prNodeId, body))
   ipcMain.handle('gh:deleteComment', (_e, id: string) => deleteComment(id))
   ipcMain.handle('gh:setResolved', (_e, id: string, resolved: boolean) => setResolved(id, resolved))
   ipcMain.handle('gh:submitReview', (_e, state: ReviewState, sha: string, event: ReviewEvent, body: string) => submitReview(state, sha, event, body))

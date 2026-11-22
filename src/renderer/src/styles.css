@@ -43,7 +43,7 @@ button.link { color: #4daafc; }
 .open-form button { background: var(--accent); color: white; border-radius: 6px; padding: 0 16px; }
 .queue-header { display: flex; align-items: baseline; gap: 12px; margin-top: 24px; }
 .queue-header h2 { font-size: 16px; margin: 0; }
-h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 20px 0 6px; }
+h3:where(.home *) { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 20px 0 6px; }
 .queue { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 6px; }
 .queue:empty { display: none; }
 .queue li + li { border-top: 1px solid var(--border); }
@@ -116,7 +116,7 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: 
 
 /* Threads inside the editor */
 .thread-zone { font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--fg); white-space: normal; user-select: text; }
-.thread-zone-inner { padding: 4px 16px 4px 8px; display: flex; flex-direction: column; gap: 6px; width: var(--zone-width, 100%); max-width: 900px; box-sizing: border-box; }
+.thread-zone-inner { padding: 4px 16px 4px 8px; display: flex; flex-direction: column; gap: 6px; max-width: 900px; box-sizing: border-box; }
 .thread { border: 1px solid var(--border); border-radius: 6px; background: var(--panel); overflow: hidden; }
 .thread.resolved { opacity: 0.85; }
 .thread-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--border); background: #202020; }
@@ -152,3 +152,60 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: 
 .review-events label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
 .review-events label.disabled { opacity: 0.5; cursor: default; }
 .outdated-panel { max-height: 40%; overflow: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border); background: var(--bg); }
+
+/* Sidebar: conversation entry and per-file thread lists */
+.files .twisty { width: 10px; flex-shrink: 0; color: var(--muted); font-size: 10px; }
+.thread-list { list-style: none; margin: 0; padding: 0; }
+.thread-row {
+  display: flex !important; align-items: baseline; gap: 6px; width: 100%;
+  padding: 2px 12px 2px 40px !important; font-size: 12px; text-align: left; white-space: nowrap;
+}
+.thread-row.dim { opacity: 0.55; }
+.thread-where { color: #4daafc; font-family: ui-monospace, Menlo, monospace; font-size: 11px; flex-shrink: 0; }
+.thread-author { color: var(--muted); flex-shrink: 0; }
+.thread-snippet { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.thread-check { color: var(--add); flex-shrink: 0; }
+
+/* Conversation view (replaces the editor pane) */
+.conversation { grid-area: main; overflow: auto; min-width: 0; }
+.conversation-inner { max-width: 860px; margin: 0 auto; padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 12px; }
+.conversation-title { font-size: 20px; margin: 0; font-weight: 600; }
+.conversation-meta code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--panel); padding: 1px 5px; border-radius: 4px; }
+.conv-item { border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 10px 12px; }
+.conv-item .composer { padding: 6px 0 0; }
+.review-verdict { font-weight: 500; }
+.review-approved { border-left: 3px solid var(--add); }
+.review-changes_requested { border-left: 3px solid var(--del); }
+.conversation-list { border-bottom: 1px solid var(--border); padding-bottom: 6px !important; margin-bottom: 4px !important; }
+.conversation-list .conv-row { padding-left: 12px !important; }
+.conv-icon { width: 16px; flex-shrink: 0; text-align: center; color: var(--muted); font-size: 11px; }
+.verdict-approved { color: var(--add); font-weight: 700; }
+.verdict-changes_requested { color: var(--del); font-weight: 700; }
+.conv-item { scroll-margin-top: 12px; transition: box-shadow 0.3s; }
+.conv-item.flash { box-shadow: 0 0 0 2px var(--accent); }
+
+/* Markdown rendered by VS Code's renderer */
+.comment-body { white-space: normal; }
+.markdown { line-height: 1.5; overflow-wrap: anywhere; }
+.markdown > div > :first-child { margin-top: 0; }
+.markdown > div > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown pre, .markdown table, .markdown details { margin: 0 0 8px; }
+.markdown ul, .markdown ol { padding-left: 22px; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 12px 0 6px; line-height: 1.25; }
+.markdown h1 { font-size: 18px; } .markdown h2 { font-size: 16px; } .markdown h3, .markdown h4 { font-size: 14px; }
+.markdown a { color: #4daafc; text-decoration: none; }
+.markdown a:hover { text-decoration: underline; }
+.markdown code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: rgba(110, 118, 129, 0.25); padding: 1px 4px; border-radius: 4px; }
+.markdown pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; overflow-x: auto; }
+.markdown pre code { background: none; padding: 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre; }
+.markdown .monaco-tokenized-source {
+  display: block; margin: 0 0 8px; padding: 8px 10px; overflow-x: auto; white-space: pre;
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.markdown blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); }
+.markdown table { border-collapse: collapse; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 4px 8px; }
+.markdown img { max-width: 100%; }
+.markdown hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+.markdown summary { cursor: pointer; }

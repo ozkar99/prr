@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DiffSide, ReviewComment, ReviewThread } from '../../../shared/types'
+import { Markdown } from './Markdown'
+import { snippet } from './snippet'
 import { threadsAt, useReview, type ReviewStore } from './ReviewStore'
 
 export type ComposerRequest = { startLine?: number }
@@ -75,7 +77,7 @@ export function Thread({ store, thread }: { store: ReviewStore; thread: ReviewTh
         {thread.isResolved && <span className="badge">Resolved</span>}
         {collapsed && (
           <span className="muted thread-summary">
-            {thread.comments[0]?.author}: {thread.comments[0]?.body.split('\n')[0]}
+            {thread.comments[0]?.author}: {snippet(thread.comments[0]?.body ?? '')}
             {thread.comments.length > 1 && ` (+${thread.comments.length - 1})`}
           </span>
         )}
@@ -136,7 +138,7 @@ function Comment({ store, comment }: { store: ReviewStore; comment: ReviewCommen
           </button>
         )}
       </div>
-      <div className="comment-body">{comment.body}</div>
+      <Markdown className="comment-body" text={comment.body} />
     </div>
   )
 }

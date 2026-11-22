@@ -2,7 +2,7 @@ import { createModelReference, type ITextFileEditorModel } from '@codingame/mona
 import * as monaco from '@codingame/monaco-vscode-editor-api'
 import type { IReference } from '@codingame/monaco-vscode-editor-service-override'
 import * as vscode from 'vscode'
-import type { Checkout, PRDetails, PRFile } from '../../../shared/types'
+import type { Checkout, DiffSide, PRDetails, PRFile } from '../../../shared/types'
 import type { CommentController } from '../review/CommentController'
 import { setOpenEditorHandler } from './services'
 
@@ -87,9 +87,21 @@ export class EditorHost {
     return rel === undefined ? undefined : this.filesByPath.get(rel)
   }
 
-  async openDiff(file: PRFile): Promise<void> {
+  /** Opens a changed file's diff, optionally at a line on one side (e.g. a review thread). */
+  async openDiff(file: PRFile, position?: Position, side: DiffSide = 'RIGHT'): Promise<void> {
     this.pushCurrent()
-    await this.showDiff(file)
+    if (position && this.diffEditor && this.current?.kind === 'diff' && this.current.file.path === file.path) {
+      this.reveal(side === 'LEFT' ? this.diffEditor.getOriginalEditor() : this.diffEditor.getModifiedEditor(), position)
+      this.onLocationChange(this.current, true)
+      return
+    }
+    await this.showDiff(file, position, side)
+  }
+
+  private reveal(editor: monaco.editor.ICodeEditor, position: Position): void {
+    editor.setPosition(position)
+    editor.revealPositionInCenter(position)
+    editor.focus()
   }
 
   async openFile(absPath: string, position?: Position): Promise<void> {
@@ -135,7 +147,7 @@ export class EditorHost {
     this.onLocationChange(loc, this.backStack.length > 0)
   }
 
-  private async showDiff(file: PRFile, position?: Position): Promise<void> {
+  private async showDiff(file: PRFile, position?: Position, side: DiffSide = 'RIGHT'): Promise<void> {
     const { owner, repo } = this.pr
     const absPath = `${this.checkout.root}/${file.path}`
 
@@ -184,10 +196,15 @@ export class EditorHost {
     this.held = next
     this.comments?.attach(this.diffEditor, file)
 
-    const target = this.diffEditor.getModifiedEditor()
+    const target = side === 'LEFT' ? this.diffEditor.getOriginalEditor() : this.diffEditor.getModifiedEditor()
     if (position) {
       target.setPosition(position)
-      target.revealPositionInCenter(position)
+      // After the diff editor's own post-load layout, which would otherwise move the scroll.
+      const diff = this.diffEditor
+      const sub = diff.onDidUpdateDiff(() => {
+        sub.dispose()
+        requestAnimationFrame(() => requestAnimationFrame(() => this.diffEditor === diff && this.reveal(target, position)))
+      })
     } else {
       // The whole file is shown, so start at the first change once the diff is computed.
       const diff = this.diffEditor
