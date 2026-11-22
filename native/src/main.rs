@@ -1,6 +1,8 @@
 #![allow(dead_code)] // while the rewrite is in progress, parts of the backend aren't wired up yet
 
 mod app;
+mod cli;
+mod instance;
 mod avatar;
 mod backend;
 #[cfg(debug_assertions)]
@@ -52,9 +54,21 @@ fn main() {
         }
         return;
     }
+    // `review-tool [PR]` typed in a terminal: hand the PR to the app and return.
+    if cli::handle(&args) {
+        return;
+    }
     backend::exec::augment_path();
     forget_parent_agent_session();
     let launch = launch_pr();
+    // Already running: give it the PR (or just bring it forward) and quit.
+    let request = instance::Request {
+        open_pr: args.iter().find_map(|a| a.strip_prefix("--open-pr=").map(String::from)),
+        local_repo: args.iter().find_map(|a| a.strip_prefix("--local-repo=").map(String::from)),
+    };
+    if instance::hand_off(&request) {
+        return;
+    }
     gpui_platform::application().run(move |cx: &mut App| {
         gpui_component::init(cx);
         diffview::init(cx);
@@ -63,7 +77,9 @@ fn main() {
         settings::init(cx);
 
         let bounds = Bounds::centered(None, size(px(1500.), px(950.)), cx);
-        cx.open_window(
+        let app_view: std::rc::Rc<std::cell::RefCell<Option<WeakEntity<app::AppView>>>> = Default::default();
+        let app_view_slot = app_view.clone();
+        let window = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
@@ -76,6 +92,7 @@ fn main() {
             },
             |window, cx| {
                 let view = cx.new(|cx| app::AppView::new(window, cx));
+                *app_view_slot.borrow_mut() = Some(view.downgrade());
                 if let Some(pr) = launch.clone() {
                     view.update(cx, |view, cx| view.open(pr, window, cx));
                 }
@@ -93,6 +110,28 @@ fn main() {
         )
         .expect("failed to open the window");
         cx.activate(true);
+
+        // Later launches (another `review-tool …`, or opening the app again) land here.
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<instance::Request>();
+        instance::listen(move |request| {
+            let _ = tx.unbounded_send(request);
+        });
+        cx.spawn(async move |cx| {
+            use futures::StreamExt;
+            while let Some(request) = rx.next().await {
+                let view = app_view.borrow().clone();
+                window
+                    .update(cx, |_, window, cx| {
+                        cx.activate(true);
+                        window.activate_window();
+                        if let (Some(pr), Some(view)) = (request.pr(), view) {
+                            view.update(cx, |view, cx| view.open(pr, window, cx)).ok();
+                        }
+                    })
+                    .ok();
+            }
+        })
+        .detach();
         cx.spawn(async move |_| backend::cleanup::on_startup().await).detach();
     });
 }

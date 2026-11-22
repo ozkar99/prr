@@ -61,10 +61,18 @@ single-instance plugin (own unix-socket handoff).
 - [x] **CP7** Settings screen (user request): agent command (replaces hand-editing
       ~/.review-tool-agent-command), editor and UI font sizes, and other preferences;
       stored in ~/Library/Application Support/review-tool/settings.json.
-- [ ] **CP6** CLI + single instance, local clone flow + switch dialog, cleanup, packaging
+- [~] **CP6** CLI + single instance, local clone flow + switch dialog, cleanup, packaging
       (.app, cask, release workflow), remove web/Node pieces, README.
 
 ## Visual reference
 
 Colors and spacing come from `src/renderer/src/styles.css` on `main` (CSS variables at the
 top) and VS Code's Dark Modern theme for code. Compare screenshots of both apps per screen.
+
+## Status (CP6 in progress)
+Done: `review-tool [PR]` CLI (src/cli.rs), single instance over a Unix socket
+(src/instance.rs), scripts/bundle-macos.sh (.app + DMG, ad-hoc signed, bundled
+pyright/bash-language-server; verified the release app runs).
+Left: release workflow for the native build, cask bump (sha after CI release),
+remove src/ + src-tauri/ + package.json and move native/ to the repo root,
+README update, polish (hover popup to Monaco's style, inline peek editor).

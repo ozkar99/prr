@@ -61,12 +61,14 @@ fn install_hint(lang: &str) -> &'static str {
     }
 }
 
-/// Node-based servers ship with the app (development: the repo's node_modules).
+/// Node-based servers ship with the app in Resources/language-servers
+/// (scripts/bundle-macos.sh); development builds use target/language-servers
+/// (`npm install --prefix target/language-servers pyright bash-language-server`).
 fn bundled(rel: &str) -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let candidates = [
-        exe_dir.join("../Resources").join(rel),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(rel),
+        exe_dir.join("../Resources/language-servers/node_modules").join(rel),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/language-servers/node_modules").join(rel),
     ];
     candidates.into_iter().find(|p| p.exists()).and_then(|p| p.canonicalize().ok())
 }
@@ -88,12 +90,12 @@ fn command(lang: &str, root: &Path) -> Result<(String, Vec<String>, Vec<(&'stati
             (cmd.into(), args, vec![])
         }
         "python" => {
-            let js = bundled("node_modules/pyright/langserver.index.js").ok_or("pyright isn't bundled with this build")?;
+            let js = bundled("pyright/langserver.index.js").ok_or("pyright isn't bundled with this build")?;
             ("node".into(), vec![js.to_string_lossy().into(), "--stdio".into()], vec![])
         }
         "starlark" => ("starpls".into(), vec!["server".into()], vec![]),
         "shell" => {
-            let js = bundled("node_modules/bash-language-server/out/cli.js").ok_or("bash-language-server isn't bundled with this build")?;
+            let js = bundled("bash-language-server/out/cli.js").ok_or("bash-language-server isn't bundled with this build")?;
             ("node".into(), vec![js.to_string_lossy().into(), "start".into()], vec![])
         }
         other => return Err(format!("unsupported language: {other}")),
