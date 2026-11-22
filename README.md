@@ -133,9 +133,14 @@ the exception: they post immediately.
 
 **⌘J** (or **✦ Claude Code** in the header) opens a terminal panel at the bottom running a coding
 agent in the PR's checkout: Claude Code by default, using your existing Claude Code login. Select
-some code and press **⌘L** (or right-click → *Ask Agent About Selection*): the panel opens with
-`About <file> lines A-B: ` typed in, and you finish the question. Drag the divider to resize; the
-session keeps running while the panel is hidden.
+some code, then right-click or use the shortcut:
+
+| Command | Shortcut | What happens |
+|---|---|---|
+| **Agent: About this code** | ⌘L | The panel opens with `About <file> lines A-B: ` typed in; you finish the question. |
+| **Agent: Explain this code** | ⌘⇧L | Sends `Explain <file> lines A-B.` right away. |
+
+Drag the divider to resize; the session keeps running while the panel is hidden.
 
 The agent knows what you're looking at through the app's MCP server, which has three tools:
 `get_selection` (file, side of the diff, lines, selected text), `get_pr` (title, description,

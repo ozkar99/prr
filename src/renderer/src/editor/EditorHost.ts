@@ -3,6 +3,9 @@ import * as monaco from '@codingame/monaco-vscode-editor-api'
 import type { IReference } from '@codingame/monaco-vscode-editor-service-override'
 import * as vscode from 'vscode'
 import type { Checkout, DiffSide, EditorSelection, PRDetails, PRFile } from '../../../shared/types'
+
+/** 'about': pre-fill a question for the user to finish; 'explain': ask for an explanation right away. */
+export type AgentAsk = 'about' | 'explain'
 import type { CommentController } from '../review/CommentController'
 import { setOpenEditorHandler } from './services'
 
@@ -70,8 +73,8 @@ export class EditorHost {
   /** The editor showing the PR head (modified side of a diff, or the plain file editor). */
   /** Called with what the user is looking at whenever the selection or cursor moves. */
   onSelection?: (selection: EditorSelection) => void
-  /** "Ask Agent About Selection" from the editor's context menu. */
-  onAskAgent?: () => void
+  /** "Agent: About this code" / "Agent: Explain this code" from the editor's context menu. */
+  onAskAgent?: (mode: AgentAsk) => void
   private lastSelection?: EditorSelection
 
   get selection(): EditorSelection | undefined {
@@ -106,17 +109,30 @@ export class EditorHost {
     }
     editor.onDidChangeCursorSelection(report)
     editor.onDidFocusEditorText(report)
-    editor.addAction({
-      id: 'review.askAgent',
-      label: 'Ask Agent About Selection',
-      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
-      contextMenuGroupId: 'navigation',
-      contextMenuOrder: 0.5,
-      run: () => {
-        report()
-        this.onAskAgent?.()
+    const agentActions: { id: string; label: string; mode: AgentAsk; keys: number }[] = [
+      // Pre-fills "About <file> lines A-B: " for the user to finish the question.
+      { id: 'review.agent.about', label: 'Agent: About this code', mode: 'about', keys: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL },
+      // Sends "Explain <file> lines A-B." right away.
+      {
+        id: 'review.agent.explain',
+        label: 'Agent: Explain this code',
+        mode: 'explain',
+        keys: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL
       }
-    })
+    ]
+    agentActions.forEach(({ id, label, mode, keys }, i) =>
+      editor.addAction({
+        id,
+        label,
+        keybindings: [keys],
+        contextMenuGroupId: 'navigation',
+        contextMenuOrder: 0.5 + i * 0.01,
+        run: () => {
+          report()
+          this.onAskAgent?.(mode)
+        }
+      })
+    )
   }
 
   get activeEditor(): monaco.editor.ICodeEditor | undefined {

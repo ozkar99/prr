@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AgentPanel, type AgentPanelHandle } from './agent/AgentPanel'
 import type { Checkout, LspLanguage, PRDetails, PRFile, ReviewThread } from '../../shared/types'
-import { EditorHost, type Location } from './editor/EditorHost'
+import { EditorHost, type AgentAsk, type Location } from './editor/EditorHost'
 import { languagesFor, serverNames, startLanguageClient, type LanguageClientHandle } from './editor/lsp'
 import { CommentController } from './review/CommentController'
 import { ReviewPanel } from './review/ReviewPanel'
@@ -39,9 +39,9 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
       return 300
     }
   })
-  const askAgent = () => {
+  const askAgent = (mode: AgentAsk = 'about') => {
     setAgentOpen(true)
-    agentRef.current?.askAboutSelection(hostRef.current?.selection ?? null)
+    agentRef.current?.askAboutSelection(hostRef.current?.selection ?? null, mode)
   }
   const askAgentRef = useRef(askAgent)
   askAgentRef.current = askAgent
@@ -95,7 +95,7 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
       clearTimeout(selectionTimer)
       selectionTimer = setTimeout(() => void window.api.setSelection(sel), 120)
     }
-    host.onAskAgent = () => askAgentRef.current()
+    host.onAskAgent = (mode) => askAgentRef.current(mode)
     if (import.meta.env.DEV) (window as unknown as { __host: EditorHost }).__host = host
     const first = pr.files.find((f) => f.status !== 'removed') ?? pr.files[0]
     if (first) void host.openDiff(first)
@@ -131,7 +131,7 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
   }, [pr, checkout, store])
 
   // Ctrl+- and the mouse back button go back, like VS Code. ⌘J toggles the
-  // agent panel; ⌘L asks the agent about the selection.
+  // agent panel; ⌘L / ⌘⇧L ask the agent about / to explain the selection.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const inTerminal = (e.target as HTMLElement | null)?.closest?.('.agent-panel')
@@ -139,10 +139,11 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
         e.preventDefault()
         e.stopPropagation()
         setAgentOpen((open) => !open)
-      } else if (e.metaKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'l' && !inTerminal) {
+      } else if (e.metaKey && !e.altKey && e.key.toLowerCase() === 'l' && !inTerminal) {
+        // ⌘L: about this code (pre-fill); ⌘⇧L: explain this code (sent right away).
         e.preventDefault()
         e.stopPropagation()
-        askAgentRef.current()
+        askAgentRef.current(e.shiftKey ? 'explain' : 'about')
       } else if (e.ctrlKey && e.key === '-' && !inTerminal) {
         e.preventDefault()
         void hostRef.current?.back()
@@ -345,7 +346,7 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
       <div className="agent-dock" style={{ height: agentOpen ? agentHeight : 0, display: agentOpen ? undefined : 'none' }}>
         <div className="agent-dock-header">
           <span>✦ {agentName}</span>
-          <span className="muted">in this PR's checkout · ⌘L asks about your selection</span>
+          <span className="muted">in this PR's checkout · ⌘L: about this code · ⌘⇧L: explain this code</span>
           <span className="spacer" />
           <button className="link" onClick={() => setAgentOpen(false)} title="Hide (⌘J)">
             ✕

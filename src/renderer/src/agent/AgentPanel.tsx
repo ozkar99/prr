@@ -4,10 +4,14 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import type { Checkout, EditorSelection, PRDetails } from '../../../shared/types'
+import type { AgentAsk } from '../editor/EditorHost'
 
 export type AgentPanelHandle = {
-  /** Types a prompt into the agent that points at the current selection; the user finishes the question. */
-  askAboutSelection(selection: EditorSelection | null): void
+  /**
+   * Asks the agent about the current selection: 'about' types "About <file> lines A-B: " for
+   * the user to finish; 'explain' sends "Explain <file> lines A-B." right away.
+   */
+  askAboutSelection(selection: EditorSelection | null, mode?: AgentAsk): void
   focus(): void
 }
 
@@ -46,6 +50,17 @@ function showsConfirmationPrompt(term: Terminal): boolean {
   return /trust (this|the files in this) folder|enter to confirm|do you want to proceed|\(y\/n\)|\[y\/n\]/i.test(lines.join('\n'))
 }
 
+/**
+ * Types text into the agent's prompt, then presses Enter if `submit`. Enter goes
+ * separately, a moment later: terminal agents treat a fast burst of input as a
+ * paste, where a newline doesn't submit.
+ */
+function typeInto(id: number, text: string, submit: boolean): void {
+  void window.api.ptyWrite(id, text).then(() => {
+    if (submit) setTimeout(() => void window.api.ptyWrite(id, '\r'), 250)
+  })
+}
+
 function selectionRef(sel: EditorSelection): string {
   const lines = sel.startLine === sel.endLine ? `line ${sel.startLine}` : `lines ${sel.startLine}-${sel.endLine}`
   const side = sel.side === 'old' ? ' (old version, before the PR)' : ''
@@ -63,7 +78,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, { pr: PRDetails; checkout
     const termRef = useRef<Terminal>(undefined)
     const fitRef = useRef<FitAddon>(undefined)
     const idRef = useRef<number>(undefined)
-    const pendingInput = useRef<string>(undefined)
+    const pendingInput = useRef<{ text: string; submit: boolean }>(undefined)
     const lastOutputAt = useRef(0)
     const [status, setStatus] = useState<Status>('idle')
 
@@ -110,7 +125,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, { pr: PRDetails; checkout
         if (pendingInput.current) {
           // Type into the agent's prompt once it has finished drawing its UI
           // (output has gone quiet), or after 10s at the latest.
-          const text = pendingInput.current
+          const { text, submit } = pendingInput.current
           pendingInput.current = undefined
           const startedAt = performance.now()
           const wait = setInterval(() => {
@@ -124,7 +139,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, { pr: PRDetails; checkout
             const settled = lastOutputAt.current > 0 && now - lastOutputAt.current > 700 && now - startedAt > 1500
             if (settled || now - startedAt > 10000) {
               clearInterval(wait)
-              if (idRef.current === id) void window.api.ptyWrite(id, text)
+              if (idRef.current === id) typeInto(id, text, submit)
             }
           }, 100)
         }
@@ -176,14 +191,15 @@ export const AgentPanel = forwardRef<AgentPanelHandle, { pr: PRDetails; checkout
     useImperativeHandle(
       ref,
       () => ({
-        askAboutSelection(selection) {
-          const text = selection ? `About ${selectionRef(selection)}: ` : ''
+        askAboutSelection(selection, mode = 'about') {
+          const submit = mode === 'explain' && !!selection
+          const text = !selection ? '' : mode === 'explain' ? `Explain ${selectionRef(selection)}.` : `About ${selectionRef(selection)}: `
           if (idRef.current === undefined) {
-            pendingInput.current = text
+            pendingInput.current = { text, submit }
             if (status !== 'starting') void start()
             return
           }
-          if (text) void window.api.ptyWrite(idRef.current, text)
+          if (text) typeInto(idRef.current, text, submit)
           termRef.current?.focus()
         },
         focus() {
