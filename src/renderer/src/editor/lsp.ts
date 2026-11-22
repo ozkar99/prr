@@ -17,31 +17,6 @@ export const serverNames: Record<LspLanguage, string> = { go: 'gopls', cpp: 'cla
 
 const STARLARK_FILES = /(^|\/)(BUILD|WORKSPACE|WORKSPACE\.bzlmod|MODULE\.bazel)$|\.(bzl|star|bazel|sky)$/
 
-// Main posts each server's MessagePort as a window message, possibly before
-// the startLsp() call that created it has resolved, so collect them by id.
-const ports = new Map<number, MessagePort>()
-const portWaiters = new Map<number, (port: MessagePort) => void>()
-window.addEventListener('message', (e: MessageEvent) => {
-  if (e.data?.type !== 'lsp:port' || !e.ports[0]) return
-  const id = e.data.id as number
-  const waiter = portWaiters.get(id)
-  if (waiter) {
-    portWaiters.delete(id)
-    waiter(e.ports[0])
-  } else {
-    ports.set(id, e.ports[0])
-  }
-})
-
-function portFor(id: number): Promise<MessagePort> {
-  const port = ports.get(id)
-  if (port) {
-    ports.delete(id)
-    return Promise.resolve(port)
-  }
-  return new Promise((resolve) => portWaiters.set(id, resolve))
-}
-
 /** Which language servers a PR needs, based on its changed files. */
 export function languagesFor(paths: string[]): LspLanguage[] {
   const langs = new Set<LspLanguage>()
@@ -62,8 +37,7 @@ export type LanguageClientHandle = {
 }
 
 /**
- * Asks main to start a server for `root`, then connects a language client to
- * the MessagePort it sends back. Only `file://` models are sent to the server,
+ * Starts a server for `root` and connects a language client to its MessagePort. Only `file://` models are sent to the server,
  * so the base side of a diff never confuses it.
  */
 /**
@@ -85,12 +59,11 @@ export async function startLanguageClient(lang: LspLanguage, root: string): Prom
         ? // Off by default in gopls; VS Code's Go extension turns it on. Colors types, packages, etc.
           { semanticTokens: true }
         : undefined
-  const id = await window.api.startLsp(lang, root)
+  const { id, port } = await window.api.startLsp(lang, root)
   let client: MonacoLanguageClient | undefined
   let disposed = false
 
   const ready = (async () => {
-    const port = await portFor(id)
     if (disposed) return
     client = new MonacoLanguageClient({
       name: serverNames[lang],

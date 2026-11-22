@@ -122,8 +122,8 @@ export type Api = {
   fsStat(path: string): Promise<FileStat | null>
   fsRead(path: string): Promise<Uint8Array>
   fsReaddir(path: string): Promise<[string, 'file' | 'directory'][]>
-  /** Starts a server and returns its id; its MessagePort arrives as an 'lsp:port' window message. */
-  startLsp(lang: LspLanguage, root: string): Promise<number>
+  /** Starts a language server; `port` speaks LSP JSON-RPC messages. */
+  startLsp(lang: LspLanguage, root: string): Promise<{ id: number; port: MessagePort }>
   stopLsp(id: number): Promise<void>
   reviewState(owner: string, repo: string, number: number): Promise<ReviewState>
   /** Adds a comment thread to the viewer's pending review, creating the review if needed. */

@@ -10,7 +10,6 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -59,13 +58,13 @@ const args = process.argv.slice(2)
 if (args.includes('-h') || args.includes('--help')) usage()
 if (args.length > 1) usage(1)
 
-if (!existsSync(join(appDir, 'out', 'main', 'index.js'))) {
+// The Tauri app bundle produced by `npm run build`.
+const appBinary = join(appDir, 'src-tauri/target/release/bundle/macos/Review Tool.app/Contents/MacOS/review-tool')
+if (!existsSync(appBinary)) {
   fail(`the app isn't built yet. Run:\n  cd ${appDir} && npm run build`)
 }
 
 const url = resolvePR(args[0])
-const electron = createRequire(join(appDir, 'package.json'))('electron') // path to the Electron binary
-const appArgs = [appDir, ...(url ? [`--open-pr=${url}`] : [])]
-
 console.log(url ? `Opening ${url}` : 'Opening review-tool')
-spawn(electron, appArgs, { detached: true, stdio: 'ignore' }).unref()
+// If the app is already running, this process hands the PR over and exits.
+spawn(appBinary, url ? [`--open-pr=${url}`] : [], { detached: true, stdio: 'ignore' }).unref()

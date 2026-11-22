@@ -55,7 +55,7 @@ export function App() {
 
   return (
     <div className="home">
-      <div className="titlebar" />
+      <div className="titlebar" data-tauri-drag-region />
       <div className="home-body">
         <form
           className="open-form"

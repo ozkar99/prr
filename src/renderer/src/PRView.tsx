@@ -133,7 +133,7 @@ export function PRView({ pr, checkout, onClose }: { pr: PRDetails; checkout: Che
 
   return (
     <div className="pr-view">
-      <header className="titlebar pr-header">
+      <header className="titlebar pr-header" data-tauri-drag-region>
         <button className="link" onClick={onClose}>
           ← Pull requests
         </button>

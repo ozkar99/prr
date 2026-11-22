@@ -7,7 +7,8 @@ peek and find-references while you review. Comments, replies and reviews go stra
 
 **You don't need VS Code installed.** The app bundles VS Code's editor code (editor, hovers,
 peek views, Markdown renderer) as npm packages via
-[`@codingame/monaco-vscode-api`](https://github.com/CodinGame/monaco-vscode-api) and runs it in Electron.
+[`@codingame/monaco-vscode-api`](https://github.com/CodinGame/monaco-vscode-api). The app is built with
+[Tauri](https://tauri.app): a Rust backend and macOS's built-in WebView, so the app is ~30 MB.
 
 ## Setup
 
@@ -15,7 +16,8 @@ peek views, Markdown renderer) as npm packages via
 
 | Tool | Why | Install |
 |---|---|---|
-| Node.js 20+ | builds and runs the app | `brew install node` |
+| Rust | builds the app | `curl https://sh.rustup.rs -sSf \| sh` ([rustup](https://rustup.rs)) |
+| Node.js 20+ | builds the frontend; runs pyright for Python | `brew install node` |
 | git | checks out PRs | Xcode Command Line Tools (`xcode-select --install`) |
 | GitHub CLI, logged in | the app reuses its login, so there's no separate sign-in | `brew install gh`, then `gh auth login` |
 
@@ -26,7 +28,7 @@ Install only the ones for languages you review:
 |---|---|---|---|
 | Go | `.go` | gopls | `brew install go`, then `go install golang.org/x/tools/gopls@latest` |
 | C/C++ | `.c` `.cc` `.cpp` `.h` `.hpp` … | clangd | included with Xcode Command Line Tools (Homebrew `llvm` is used if installed) |
-| Python | `.py` `.pyi` | pyright | nothing: bundled with the app |
+| Python | `.py` `.pyi` | pyright | nothing: bundled with the app (runs on Node.js) |
 | Starlark / Bazel | `BUILD` `.bazel` `.bzl` `WORKSPACE` `MODULE.bazel` | starpls | download from [starpls releases](https://github.com/withered-magic/starpls/releases) and put it on your `PATH` |
 
 A missing server shows as **not installed** in the app's header; hover over it for the install command.
@@ -40,14 +42,17 @@ npm install
 npm run build
 ```
 
+The first build compiles the Rust dependencies and takes a few minutes. The result is
+`src-tauri/target/release/bundle/macos/Review Tool.app`.
+
 ### 3. Add the `review-tool` command
 
 ```sh
 npm link
 ```
 
-This puts `review-tool` on your `PATH`, pointing at this checkout. After pulling new changes,
-run `npm run build` again; the command always launches the latest build.
+This puts `review-tool` on your `PATH`, pointing at this checkout. It launches the app built in
+step 2; after pulling new changes, run `npm run build` again.
 
 ## Usage
 
@@ -133,13 +138,17 @@ PR code is untrusted, so the app never builds or runs it. In particular:
 ## Development
 
 ```sh
-npm run dev        # app with hot reload
+npm run dev        # app with hot reload (frontend) and auto-rebuild (Rust)
 npm run typecheck
-npm run build
+npm run build      # release .app
 ```
 
 While `npm run dev` is running, `review-tool <pr>` opens PRs in the dev window (the app allows
 a single instance).
+
+For scripted testing, a development build started with `REVIEW_TOOL_DEBUG_EVAL=<port>` runs
+JavaScript POSTed to `http://127.0.0.1:<port>/` in the window and returns the JSON result
+(WebKit has no Chrome-style remote protocol). This hook isn't compiled into release builds.
 
 Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one bare clone per repo,
 `worktrees/` one checkout per PR. Delete either to free space; they're re-created on demand.
@@ -149,10 +158,12 @@ Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one bar
 | Piece | Where |
 |---|---|
 | `review-tool` command: resolves the PR with `gh`, launches or reuses the app | `bin/review-tool.mjs` |
-| GitHub API: review queue, PR files, threads, comments, submitting reviews | `src/main/github.ts` |
-| Bare clone per repo + `git worktree` per PR, diff against the merge-base | `src/main/git.ts` |
-| Language servers spawned per PR; LSP relayed to the window over a MessagePort | `src/main/lsp.ts` |
-| Read-only file access for the editor | `src/main/fsaccess.ts` |
+| App setup, commands, single instance, window | `src-tauri/src/lib.rs` |
+| GitHub API: review queue, PR files, threads, comments, submitting reviews | `src-tauri/src/github.rs` |
+| Bare clone per repo + `git worktree` per PR, diff against the merge-base | `src-tauri/src/git.rs` |
+| Language servers spawned per PR; LSP messages relayed to the page over a Tauri Channel | `src-tauri/src/lsp.rs` |
+| Read-only file access for the editor | `src-tauri/src/fsaccess.rs` |
+| `window.api`: the page's interface to the Rust commands | `src/renderer/src/api.ts` |
 | VS Code services, grammars (incl. Starlark), disk-backed `file://` provider | `src/renderer/src/editor/` |
 | Diff / file editor, cross-file navigation, back stack | `src/renderer/src/editor/EditorHost.ts` |
 | Review threads in the editor, sidebar, conversation, review panel | `src/renderer/src/review/` |
