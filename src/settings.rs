@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 actions!(review_tool, [OpenSettings]);
 
-pub const EDITOR_FONT: (f32, f32, f32) = (13., 9., 24.);
+pub const EDITOR_FONT: (f32, f32, f32) = (12., 9., 24.);
 pub const TERMINAL_FONT: (f32, f32, f32) = (12., 9., 24.);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
