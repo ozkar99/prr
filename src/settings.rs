@@ -30,11 +30,13 @@ pub struct Settings {
     pub split_ratio: f32,
     /// Mark PR checkouts as trusted in Claude Code, so it doesn't ask. Off by default.
     pub trust_claude_checkouts: bool,
+    /// The gh account prr uses for GitHub; empty: gh's active account.
+    pub github_account: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: false }
+        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: false, github_account: String::new() }
     }
 }
 
@@ -82,6 +84,7 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
 }
 
 fn apply(cx: &mut App) {
+    crate::backend::auth::set_account(&get(cx).github_account);
     let size = get(cx).editor_font_size;
     gpui_component::Theme::global_mut(cx).mono_font_size = px(size);
     gpui_component::Theme::sync_base(cx);
@@ -92,18 +95,14 @@ fn apply(cx: &mut App) {
 
 pub enum SettingsEvent {
     Close,
-    /// The saved GitHub token changed: check GitHub access again.
-    GitHubTokenChanged,
+    /// Another GitHub account was picked: check GitHub access again.
+    GitHubAccountChanged,
 }
 
 pub struct SettingsView {
     agent_command: Entity<InputState>,
-    github_token: Entity<InputState>,
-    /// Whether a token is saved in the Keychain.
-    token_saved: bool,
-    token_error: Option<String>,
-    /// Where the token in use comes from (None: none found yet).
-    token_in_use: Option<String>,
+    /// gh's github.com accounts (None: still loading).
+    accounts: Option<Vec<crate::backend::auth::Account>>,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -124,66 +123,69 @@ impl SettingsView {
                 update(cx, |s| s.agent_command = value);
             }
         });
-        let github_token = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("ghp_… or github_pat_…"));
-        let token_sub = cx.subscribe_in(&github_token, window, |this: &mut Self, _, ev: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = ev {
-                this.save_token(window, cx);
-            }
-        });
-        let token_saved = crate::backend::auth::saved().is_some();
-        let mut this = Self { agent_command, github_token, token_saved, token_error: None, token_in_use: None, focus: cx.focus_handle(), _subs: vec![sub, token_sub] };
-        this.load_token_in_use(cx);
-        this
-    }
-
-    fn load_token_in_use(&mut self, cx: &mut Context<Self>) {
-        let fut = crate::backend::task(async { crate::backend::auth::token().await.map(|t| t.source.describe()).ok() });
+        let fut = crate::backend::task(crate::backend::auth::accounts());
         cx.spawn(async move |this, cx| {
-            let source = fut.await;
+            let accounts = fut.await;
             this.update(cx, |this, cx| {
-                this.token_in_use = source;
+                this.accounts = Some(accounts);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+        Self { agent_command, accounts: None, focus: cx.focus_handle(), _subs: vec![sub] }
     }
 
-    fn save_token(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let value = self.github_token.read(cx).value().trim().to_string();
-        if value.is_empty() {
+    fn pick_account(&mut self, login: String, cx: &mut Context<Self>) {
+        if get(cx).github_account == login {
             return;
         }
-        match crate::backend::auth::save(&value) {
-            Ok(()) => {
-                self.token_saved = true;
-                self.token_error = None;
-                self.github_token.update(cx, |input, cx| input.set_value("", window, cx));
-                self.token_changed(cx);
-            }
-            Err(e) => self.token_error = Some(format!("Couldn't save it in the Keychain: {e}")),
+        update(cx, |s| s.github_account = login);
+        cx.emit(SettingsEvent::GitHubAccountChanged);
+    }
+
+    fn render_accounts(&self, picked: &str, cx: &mut Context<Self>) -> AnyElement {
+        let Some(accounts) = &self.accounts else { return ui::muted("Asking gh…").text_size(theme::TEXT_SMALL).into_any_element() };
+        if accounts.is_empty() {
+            return ui::muted("gh isn't logged in to github.com (or is too old to list accounts). Run: gh auth login").text_size(theme::TEXT_SMALL).into_any_element();
         }
-        cx.notify();
-    }
-
-    fn remove_token(&mut self, cx: &mut Context<Self>) {
-        crate::backend::auth::remove();
-        self.token_saved = false;
-        self.token_changed(cx);
-        cx.notify();
-    }
-
-    fn token_changed(&mut self, cx: &mut Context<Self>) {
-        let forget = crate::backend::task(crate::backend::auth::forget());
-        cx.spawn(async move |this, cx| {
-            forget.await;
-            this.update(cx, |this, cx| {
-                this.load_token_in_use(cx);
-                cx.emit(SettingsEvent::GitHubTokenChanged)
-            })
-            .ok();
-        })
-        .detach();
+        let active = accounts.iter().find(|a| a.active).map(|a| format!(" (now @{})", a.login)).unwrap_or_default();
+        let mut options: Vec<(String, String, Option<&'static str>)> = vec![(String::new(), format!("gh's active account{active}"), None)];
+        for a in accounts {
+            options.push((a.login.clone(), format!("@{}", a.login), (!a.ok).then_some("gh's token for it has expired: gh auth refresh")));
+        }
+        // An account picked earlier that gh is no longer logged in to.
+        if !picked.is_empty() && !accounts.iter().any(|a| a.login == picked) {
+            options.push((picked.to_string(), format!("@{picked}"), Some("gh isn't logged in to it any more")));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .children(options.into_iter().enumerate().map(|(i, (login, label, warning))| {
+                let selected = login == picked;
+                div()
+                    .id(("gh-account", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick_account(login.clone(), cx)))
+                    .child(
+                        div()
+                            .size(px(14.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(hsla(if selected { theme::ACCENT } else { theme::MUTED }))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(selected, |el| el.child(div().size(px(6.)).rounded_full().bg(hsla(theme::ACCENT)))),
+                    )
+                    .child(label)
+                    .children(warning.map(|w| div().text_size(theme::TEXT_SMALL).text_color(hsla(theme::WARN)).child(w)))
+            }))
+            .into_any_element()
     }
 }
 
@@ -224,10 +226,7 @@ fn row(label: &str, help: Option<&str>, control: impl IntoElement) -> impl IntoE
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.focus.contains_focused(window, cx)
-            && !self.agent_command.read(cx).focus_handle(cx).is_focused(window)
-            && !self.github_token.read(cx).focus_handle(cx).is_focused(window)
-        {
+        if !self.focus.contains_focused(window, cx) && !self.agent_command.read(cx).focus_handle(cx).is_focused(window) {
             window.focus(&self.focus, cx);
         }
         let s = get(cx).clone();
@@ -279,33 +278,14 @@ impl Render for SettingsView {
                             .child(ui::link("settings-close", "✕").on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close)))),
                     )
                     .child(row(
-                        "GitHub token",
-                        Some("Optional. Saved in your macOS Keychain."),
+                        "GitHub account",
+                        Some("prr uses the GitHub CLI's login. Log in to more accounts with gh auth login."),
                         div()
                             .flex()
                             .flex_col()
                             .gap(px(6.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(8.))
-                                    .items_center()
-                                    .child(div().flex_1().child(Input::new(&self.github_token)))
-                                    .child(ui::button("token-save", if self.token_saved { "Replace" } else { "Save" }).on_click(cx.listener(|this, _, window, cx| this.save_token(window, cx)))),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(8.))
-                                    .text_size(theme::TEXT_SMALL)
-                                    .child(match &self.token_in_use {
-                                        Some(source) => div().child(format!("In use: {source}.")),
-                                        None => div().text_color(hsla(theme::WARN)).child("No token found."),
-                                    })
-                                    .when(self.token_saved, |el| el.child(ui::link("token-remove", "Remove saved token").on_click(cx.listener(|this, _, _, cx| this.remove_token(cx))))),
-                            )
-                            .children(self.token_error.clone().map(|e| div().text_size(theme::TEXT_SMALL).text_color(hsla(theme::DEL)).child(e)))
-                            .child(ui::muted("Without one, prr uses git's saved credentials for https://github.com, $GH_TOKEN or $GITHUB_TOKEN, or the GitHub CLI's login, in that order, skipping any GitHub rejects. A personal access token needs read access to the repositories (and write access to post reviews); for an organization with SAML single sign-on, authorize it for the organization.").text_size(theme::TEXT_SMALL)),
+                            .child(self.render_accounts(&s.github_account, cx))
+                            .child(ui::muted("Used for GitHub and for prr's own clones. Your gh and git settings don't change.").text_size(theme::TEXT_SMALL)),
                     ))
                     .child(row(
                         "Agent command",
