@@ -1671,8 +1671,8 @@ impl PrView {
                         )
                         .context_menu(move |menu, _, _| {
                             menu.action_context(focus.clone())
-                                .menu("Agent: About this code", Box::new(AskAgent))
                                 .menu("Agent: Explain this code", Box::new(ExplainAgent))
+                                .menu("Agent: About this code", Box::new(AskAgent))
                                 .separator()
                                 .menu("Go to Definition", Box::new(GoToDefinition))
                                 .menu("Peek Definition", Box::new(PeekDefinition))
