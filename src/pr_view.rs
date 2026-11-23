@@ -1338,14 +1338,14 @@ impl PrView {
                         )
                         .context_menu(move |menu, _, _| {
                             menu.action_context(focus.clone())
-                                .menu("Add Review Comment", Box::new(AddComment))
-                                .separator()
                                 .menu("Agent: About this code", Box::new(AskAgent))
                                 .menu("Agent: Explain this code", Box::new(ExplainAgent))
                                 .separator()
                                 .menu("Go to Definition", Box::new(GoToDefinition))
                                 .menu("Peek Definition", Box::new(PeekDefinition))
                                 .menu("Find All References", Box::new(FindReferences))
+                                .separator()
+                                .menu("Add Review Comment", Box::new(AddComment))
                         })
                         .child(
                         Diff::new(state)
