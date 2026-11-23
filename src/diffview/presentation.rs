@@ -332,14 +332,14 @@ mod tests {
 
     #[test]
     fn language_detection_uses_filename() {
+        // The app's own mapping (src/highlight.rs), not GPUI Kit's.
         for (name, language) in [
-            ("src/main.RS", "rust"),
-            ("src/components/App.jsx", "javascript"),
-            ("C:\\src\\lib.hpp", "cpp"),
-            ("build/CMakeLists.txt", "cmake"),
-            ("build/Makefile", "make"),
-            ("directory.rs/README", "text"),
-            ("ts", "text"),
+            ("cmd/main.go", "go"),
+            ("src/lib.hpp", "cpp"),
+            ("tools/BUILD", "starlark"),
+            ("scripts/run.sh", "bash"),
+            ("directory.go/README", "text"),
+            ("go", "text"),
             ("notes.unknown", "text"),
         ] {
             assert_eq!(detected_language(name).as_str(), language);
@@ -348,7 +348,7 @@ mod tests {
             .unwrap()
             .remove(0);
         assert_eq!(file.language().as_str(), "text");
-        assert_eq!(file.with_language("rust").language().as_str(), "rust");
+        assert_eq!(file.with_language("go").language().as_str(), "go");
     }
 
     #[test]
@@ -431,7 +431,7 @@ mod tests {
         }
 
         let file = DiffFile::parse(
-            "--- a/a.rs\n+++ b/a.rs\n@@ -1,2 +1,2 @@\n-let a = 1;\n+let a = 2;\n /* open\n@@ -10,2 +10,2 @@\n close */\n-let old = 0;\n+let new = 0;\n",
+            "--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,2 @@\n-let a = 1;\n+let a = 2;\n /* open\n@@ -10,2 +10,2 @@\n close */\n-let old = 0;\n+let new = 0;\n",
         )
         .unwrap()
         .remove(0);
@@ -462,7 +462,7 @@ mod tests {
         // Each side of each hunk alone, named by the file's language.
         let calls = std::mem::take(&mut *calls.lock().unwrap());
         assert_eq!(calls.len(), 4);
-        assert!(calls.iter().all(|(language, _)| language == "rust"));
+        assert!(calls.iter().all(|(language, _)| language == "go"));
         assert!(
             calls
                 .iter()
@@ -489,7 +489,7 @@ mod tests {
 
         // `é` is two bytes, so 5..6 splits it: counted in characters, not bytes.
         let file =
-            DiffFile::parse("--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-let é = 1;\n+let é = 2;\n")
+            DiffFile::parse("--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-let é = 1;\n+let é = 2;\n")
                 .unwrap()
                 .remove(0);
         let split: DiffSyntaxHighlighter =
@@ -517,7 +517,7 @@ mod tests {
         // Hunks are separated by unavailable source. Parsing their fragments
         // together would join `/* open` and `close */` into one comment.
         let file = DiffFile::parse(
-            "--- a/a.rs\n+++ b/a.rs\n@@ -1,2 +1,2 @@\n-let a = 1;\n+let a = 2;\n /* open\n@@ -10,2 +10,2 @@\n close */\n-fn old() {}\n+fn new() {}\n",
+            "--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,2 @@\n-let a = 1;\n+let a = 2;\n /* open\n@@ -10,2 +10,2 @@\n close */\n-fn old() {}\n+fn new() {}\n",
         )
         .unwrap()
         .remove(0);
