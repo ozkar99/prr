@@ -297,7 +297,21 @@ impl TerminalView {
             return;
         }
         let mode = self.mode();
-        if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+        if mode.intersects(TermMode::MOUSE_MODE) {
+            // The app asked for mouse events (e.g. Claude Code's full-screen UI):
+            // report the wheel, like xterm, as buttons 64 (up) / 65 (down).
+            let (col, row) = self.cell_at(event.position);
+            let button: u8 = if n > 0 { 64 } else { 65 };
+            for _ in 0..n.abs() {
+                let report = if mode.contains(TermMode::SGR_MOUSE) {
+                    format!("\x1b[<{button};{};{}M", col + 1, row + 1).into_bytes()
+                } else {
+                    // Legacy X10 encoding: values offset by 32, coordinates capped at 223.
+                    vec![0x1b, b'[', b'M', 32 + button, 32 + (col + 1).min(223) as u8, 32 + (row + 1).min(223) as u8]
+                };
+                self.write(report);
+            }
+        } else if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
             let seq: &[u8] = if n > 0 { b"\x1bOA" } else { b"\x1bOB" };
             for _ in 0..n.abs() {
                 self.write(seq.to_vec());
@@ -306,6 +320,16 @@ impl TerminalView {
             self.term.lock().scroll_display(Scroll::Delta(n));
         }
         cx.notify();
+    }
+
+    /// The screen cell (column, row; 0-based) under a window position.
+    fn cell_at(&self, position: Point<Pixels>) -> (usize, usize) {
+        let b = self.grid_bounds.get();
+        let x = (position.x - b.left()).max(px(0.));
+        let y = (position.y - b.top()).max(px(0.));
+        let col = ((x / self.size.cell_w) as usize).min(self.size.cols.saturating_sub(1));
+        let row = ((y / self.size.cell_h) as usize).min(self.size.rows.saturating_sub(1));
+        (col, row)
     }
 
     /// (lines of history above the screen, lines scrolled up, screen lines).
