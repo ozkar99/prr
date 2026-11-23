@@ -133,6 +133,7 @@ fn main() {
             }
         })
         .detach();
-        cx.spawn(async move |_| backend::cleanup::on_startup().await).detach();
+        // On the backend runtime: the cleanup uses tokio (files, git).
+        let _ = backend::task(backend::cleanup::on_startup());
     });
 }
