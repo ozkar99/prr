@@ -28,11 +28,13 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// The old side's share of a side-by-side diff.
     pub split_ratio: f32,
+    /// Mark PR checkouts as trusted in Claude Code, so it doesn't ask.
+    pub trust_claude_checkouts: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5 }
+        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: true }
     }
 }
 
@@ -216,6 +218,39 @@ impl Render for SettingsView {
                             .child(Input::new(&self.agent_command))
                             .child(ui::muted("For example: codex, or gemini. It runs through your login shell and gets the review context as REVIEW_TOOL_* environment variables and an MCP server ($REVIEW_TOOL_MCP_CONFIG, $REVIEW_TOOL_MCP_STDIO). Applies the next time the agent starts.").text_size(theme::TEXT_SMALL))
                             .children(legacy_note.map(|n| ui::muted(n).text_size(theme::TEXT_SMALL))),
+                    ))
+                    .child(row(
+                        "Trust PR checkouts in Claude Code",
+                        Some("Skips Claude Code's \"trust this folder?\" for the agent panel."),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .id("trust-claude")
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .cursor_pointer()
+                                    .on_click(|_, _, cx| update(cx, |s| s.trust_claude_checkouts = !s.trust_claude_checkouts))
+                                    .child(
+                                        div()
+                                            .size(px(14.))
+                                            .rounded(px(3.))
+                                            .border_1()
+                                            .border_color(hsla(if s.trust_claude_checkouts { theme::ACCENT } else { theme::MUTED }))
+                                            .when(s.trust_claude_checkouts, |el| el.bg(hsla(theme::ACCENT)))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(10.))
+                                            .text_color(gpui::white())
+                                            .when(s.trust_claude_checkouts, |el| el.child("✓")),
+                                    )
+                                    .child(if s.trust_claude_checkouts { "On" } else { "Off" }),
+                            )
+                            .child(ui::muted("The panel's Claude Code is read-only and ignores the repository's own settings, hooks and MCP servers, which is what that prompt protects against. When on, the app marks the PR's repository as trusted in ~/.claude.json before starting it.").text_size(theme::TEXT_SMALL)),
                     ))
                     .child(row("Editor font size", Some("Code in diffs and files."), stepper("editor-font", s.editor_font_size, EDITOR_FONT, |s, v| s.editor_font_size = v, cx)))
                     .child(row("Terminal font size", Some("The agent panel."), stepper("terminal-font", s.terminal_font_size, TERMINAL_FONT, |s, v| s.terminal_font_size = v, cx)))

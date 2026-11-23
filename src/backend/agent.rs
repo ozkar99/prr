@@ -7,7 +7,7 @@ use crate::backend::exec::{data_dir, which};
 use crate::backend::mcp;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Launch {
     pub program: String,
@@ -128,6 +128,13 @@ pub fn launch(pr_label: &str, merge_base: &str, root: &str, session: &mcp::Sessi
         return Ok(Launch { program: shell, args: vec!["-l".into(), "-c".into(), command], env });
     }
 
+    // Skip Claude Code's "trust this folder?" for PR checkouts (Settings; on by default).
+    if crate::settings::load().trust_claude_checkouts
+        && let Err(e) = trust_in_claude_code(Path::new(root))
+    {
+        eprintln!("prr: couldn't mark the checkout as trusted in Claude Code: {e}");
+    }
+
     let claude = which("claude").ok_or(
         "Claude Code isn't installed (curl -fsSL https://claude.ai/install.sh | bash), \
          or put another agent's command in ~/.review-tool-agent-command",
@@ -154,6 +161,98 @@ pub fn launch(pr_label: &str, merge_base: &str, root: &str, session: &mcp::Sessi
         "mcp__review-tool".into(),
     ];
     Ok(Launch { program: claude.to_string_lossy().into(), args, env })
+}
+
+/// Marks the repository behind `root` as trusted in Claude Code's own config
+/// (`~/.claude.json`, `projects["<repo>"].hasTrustDialogAccepted`), so its
+/// "trust this folder?" prompt doesn't come up for PR checkouts. Claude Code
+/// keys trust by the repository's git folder (minus a trailing `/.git`), which
+/// covers every PR checkout and worktree of that repository. Nothing is written
+/// when it's already trusted; otherwise only that flag is set, and the file is
+/// replaced atomically with everything else kept as it was.
+///
+/// The panel's Claude Code ignores the repository's own settings, hooks and
+/// MCP servers and is read-only, which is what the prompt guards against.
+pub fn trust_in_claude_code(root: &Path) -> Result<(), String> {
+    let path = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude.json");
+    trust_in_claude_config(&path, root)
+}
+
+fn trust_in_claude_config(path: &Path, root: &Path) -> Result<(), String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err("not a git checkout".into());
+    }
+    let common = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let key = common.strip_suffix("/.git").unwrap_or(&common).to_string();
+
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        // No Claude Code config yet: let Claude Code create it (and ask once).
+        Err(_) => return Ok(()),
+    };
+    let mut config: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("~/.claude.json: {e}"))?;
+    let projects = config
+        .as_object_mut()
+        .ok_or("~/.claude.json isn't an object")?
+        .entry("projects")
+        .or_insert_with(|| serde_json::json!({}));
+    let project = projects.as_object_mut().ok_or("projects isn't an object")?.entry(key).or_insert_with(|| serde_json::json!({}));
+    if project["hasTrustDialogAccepted"] == serde_json::Value::Bool(true) {
+        return Ok(());
+    }
+    project.as_object_mut().ok_or("project entry isn't an object")?.insert("hasTrustDialogAccepted".into(), true.into());
+    let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension(format!("json.prr-{}", std::process::id()));
+    std::fs::write(&tmp, body + "\n").map_err(|e| e.to_string())?;
+    // Keep the file's permissions (it can hold credentials).
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusts_the_repository_once_and_keeps_everything_else() {
+        let dir = std::env::temp_dir().join(format!("prr-trust-{}", std::process::id()));
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(&repo).status().unwrap().success());
+        let repo = repo.canonicalize().unwrap();
+        let config = dir.join("claude.json");
+        std::fs::write(&config, r#"{"numStartups": 3, "projects": {"/other": {"hasTrustDialogAccepted": false, "x": 1}}, "zLast": true}"#).unwrap();
+
+        trust_in_claude_config(&config, &repo).unwrap();
+        let text = std::fs::read_to_string(&config).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let key = repo.to_string_lossy().to_string();
+        assert_eq!(v["projects"][&key]["hasTrustDialogAccepted"], true);
+        assert_eq!(v["projects"]["/other"]["hasTrustDialogAccepted"], false, "other entries untouched");
+        assert_eq!((v["numStartups"].clone(), v["zLast"].clone()), (3.into(), true.into()));
+        assert!(text.find("numStartups").unwrap() < text.find("zLast").unwrap(), "key order kept");
+
+        // Already trusted: the file isn't rewritten.
+        let before = std::fs::metadata(&config).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        trust_in_claude_config(&config, &repo).unwrap();
+        assert_eq!(std::fs::metadata(&config).unwrap().modified().unwrap(), before);
+
+        // A subfolder of the repository maps to the same entry.
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        std::fs::write(&config, "{}").unwrap();
+        trust_in_claude_config(&config, &repo.join("sub")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(v["projects"][&key]["hasTrustDialogAccepted"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// `prr --mcp-stdio <url> <token>`: a stdio MCP server that forwards
