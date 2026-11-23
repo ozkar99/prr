@@ -167,6 +167,13 @@ pub struct PrView {
     agent_status: AgentStatus,
     /// (window y, height) while the splitter is dragged.
     splitter_drag: Option<(Pixels, f32)>,
+    sidebar_width: f32,
+    /// (window x, width) while the sidebar's edge is dragged.
+    sidebar_drag: Option<(Pixels, f32)>,
+    split_ratio: f32,
+    split_drag: bool,
+    /// Where the diff is drawn (for the split divider).
+    code_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// What the reviewer last selected or clicked (for ⌘L / ⌘⇧L).
     last_selection: Option<Value>,
     /// The symbol under the pointer (for the right-click menu).
@@ -234,6 +241,11 @@ impl PrView {
             agent: None,
             agent_status: AgentStatus::Idle,
             splitter_drag: None,
+            sidebar_width: crate::settings::get(cx).sidebar_width,
+            sidebar_drag: None,
+            split_ratio: crate::settings::get(cx).split_ratio,
+            split_drag: false,
+            code_bounds: Default::default(),
             last_selection: None,
             hovered_token: None,
             mcp: mcp::new_session(),
@@ -1398,7 +1410,7 @@ impl PrView {
             // The directory, cut from the left so its end stays visible (like the web's rtl ellipsis).
             let stats = format!("+{} −{}", f.additions, f.deletions).chars().count() as f32 * 6.2;
             let count = if threads.is_empty() { 0. } else { 34. };
-            let budget = 276. - 10. - 12. - 30. - name.chars().count() as f32 * 6.6 - stats - count;
+            let budget = self.sidebar_width - 24. - 10. - 12. - 30. - name.chars().count() as f32 * 6.6 - stats - count;
             let max_chars = (budget / 5.6).max(0.) as usize;
             let shown_dir = if dir.is_empty() {
                 String::new()
@@ -1461,7 +1473,7 @@ impl PrView {
 
         let mut sidebar = div()
             .id("sidebar")
-            .w(theme::SIDEBAR_WIDTH)
+            .w(px(self.sidebar_width))
             .flex_shrink_0()
             .h_full()
             .overflow_y_scroll()
@@ -1588,10 +1600,39 @@ impl PrView {
                 FileView::Diff(state) => {
                     let (hover_view, click_view) = (weak.clone(), weak.clone());
                     let focus = self.focus.clone();
+                    let bounds_cell = self.code_bounds.clone();
+                    let ratio = self.split_ratio;
+                    let show_divider = !matches!(self.shown, Some(Shown::Plain(_)));
+                    let dragging_split = self.split_drag;
                     div()
                         .id("code")
+                        .relative()
                         .flex_1()
                         .min_h_0()
+                        .child(canvas(move |bounds, _, _| bounds_cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
+                        // The divider between the old and new sides: drag to resize.
+                        .when(show_divider, |el| {
+                            el.child(
+                                div()
+                                    .id("split-resize")
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .left(relative(ratio))
+                                    .ml(px(-3.))
+                                    .w(px(6.))
+                                    .cursor_col_resize()
+                                    .hover(|el| el.bg(gpui::rgba(0x0078d466)))
+                                    .when(dragging_split, |el| el.bg(gpui::rgba(0x0078d466)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            this.split_drag = true;
+                                            cx.stop_propagation();
+                                        }),
+                                    ),
+                            )
+                        })
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -1629,6 +1670,7 @@ impl PrView {
                             .header_visible(false)
                             .hunk_separator(DiffHunkSeparator::Simple)
                             .change_indicator(DiffChangeIndicator::Signs)
+                            .split_ratio(ratio)
                             .annotations(annotations)
                             .render_annotation(move |annotation, _, _| {
                                 let key = annotation.id().to_string();
@@ -2040,6 +2082,22 @@ impl Render for PrView {
             .on_action(cx.listener(|this, _: &ExplainAgent, window, cx| this.ask_agent(true, window, cx)))
             .on_action(cx.listener(|this, _: &AddComment, window, cx| this.add_comment_at_cursor(window, cx)))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
+                if ev.pressed_button != Some(MouseButton::Left) {
+                    this.sidebar_drag = None;
+                    this.split_drag = false;
+                }
+                if let Some((x0, w0)) = this.sidebar_drag {
+                    let max = (f32::from(window.viewport_size().width) - 400.).max(180.);
+                    this.sidebar_width = (w0 + f32::from(ev.position.x - x0)).clamp(180., max);
+                    cx.notify();
+                }
+                if this.split_drag {
+                    let b = this.code_bounds.get();
+                    if b.size.width > px(100.) {
+                        this.split_ratio = (f32::from(ev.position.x - b.left()) / f32::from(b.size.width)).clamp(0.15, 0.85);
+                        cx.notify();
+                    }
+                }
                 if let Some((y0, h0)) = this.splitter_drag {
                     if ev.pressed_button != Some(MouseButton::Left) {
                         this.splitter_drag = None;
@@ -2057,6 +2115,14 @@ impl Render for PrView {
                         let h = this.agent_height;
                         crate::settings::update(cx, |s| s.agent_panel_height = h);
                     }
+                    if this.sidebar_drag.take().is_some() {
+                        let w = this.sidebar_width;
+                        crate::settings::update(cx, |s| s.sidebar_width = w);
+                    }
+                    if std::mem::take(&mut this.split_drag) {
+                        let r = this.split_ratio;
+                        crate::settings::update(cx, |s| s.split_ratio = r);
+                    }
                 }),
             )
             .child(self.render_header(cx))
@@ -2067,7 +2133,33 @@ impl Render for PrView {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.render_sidebar(cx))
+                    .child(
+                        div()
+                            .relative()
+                            .h_full()
+                            .flex_shrink_0()
+                            .child(self.render_sidebar(cx))
+                            // Drag the sidebar's edge to resize it.
+                            .child(
+                                div()
+                                    .id("sidebar-resize")
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .right(px(-3.))
+                                    .w(px(6.))
+                                    .cursor_col_resize()
+                                    .hover(|el| el.bg(hsla(theme::ACCENT)))
+                                    .when(self.sidebar_drag.is_some(), |el| el.bg(hsla(theme::ACCENT)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                                            this.sidebar_drag = Some((ev.position.x, this.sidebar_width));
+                                            cx.stop_propagation();
+                                        }),
+                                    ),
+                            ),
+                    )
                     .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_1().min_h_0().flex().child(main)).children(dock))
             })
             .children(self.render_hover(cx))

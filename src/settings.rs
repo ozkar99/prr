@@ -24,11 +24,15 @@ pub struct Settings {
     pub editor_font_size: f32,
     pub terminal_font_size: f32,
     pub agent_panel_height: f32,
+    /// The PR sidebar's width, in px.
+    pub sidebar_width: f32,
+    /// The old side's share of a side-by-side diff.
+    pub split_ratio: f32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300. }
+        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5 }
     }
 }
 

@@ -97,6 +97,8 @@ shows their size with buttons to clear them. Your own clones are never touched b
   results, grouped by file. Click to preview, double-click or **Enter** to open, **↑/↓** to move,
   **Esc** to close.
 - **Ctrl+-**, the mouse back button, or **←** above the code: go back.
+- Drag the sidebar's edge, or the divider between the old and new sides of the diff, to resize
+  them; the app remembers both.
 
 ## Reviewing
 
@@ -207,7 +209,7 @@ your confirmation in the app, whatever the agent.
 - **Agent command**: empty for Claude Code, or another agent's command.
 - **Editor font size** and **terminal font size**, applied right away.
 
-The agent panel's height is remembered too. Everything is saved in
+The sidebar's width, the diff's split and the agent panel's height are remembered too. Everything is saved in
 `~/Library/Application Support/review-tool/settings.json`.
 
 ## Troubleshooting
