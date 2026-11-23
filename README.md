@@ -30,6 +30,9 @@ brew install --cask prr
 This puts **prr** in Applications and the `prr` command on your `PATH`, and
 installs Node.js if you don't have it.
 
+Update with `brew upgrade --cask prr`. Uninstall with `brew uninstall --cask prr`
+(add `--zap` to also remove its checkouts and settings).
+
 ### GitHub access
 
 prr has no login of its own. It uses the first GitHub token it finds, skipping any that GitHub
@@ -43,15 +46,37 @@ rejects:
 3. the `GH_TOKEN` or `GITHUB_TOKEN` environment variable (only when you start prr from a terminal),
 4. the [GitHub CLI](https://cli.github.com)'s login, if `gh` is installed.
 
-If none of these work for you, create a
-[personal access token](https://github.com/settings/personal-access-tokens) with read access to the
-repositories you review (and write access to pull requests, to post reviews), and paste it in
-Settings. If your organization uses SAML single sign-on, authorize the token for it. The home screen
-shows which token is in use and the account it belongs to. prr's own clones use the same token over
-HTTPS, so SSH keys aren't needed.
+If none of these work for you, create a personal access token (see below) and paste it in
+Settings. The home screen shows which token is in use and the account it belongs to. prr's own
+clones use the same token over HTTPS, so SSH keys aren't needed.
 
-Update with `brew upgrade --cask prr`. Uninstall with `brew uninstall --cask prr`
-(add `--zap` to also remove its checkouts and settings).
+#### Token permissions
+
+A [fine-grained token](https://github.com/settings/personal-access-tokens/new) (recommended):
+
+| Setting | Value | What prr uses it for |
+|---|---|---|
+| Resource owner | the organization (or account) whose PRs you review | A fine-grained token covers one owner; make one per organization if you need more. |
+| Repository access | the repositories you review, or all of them | |
+| **Contents** | Read-only | Cloning and fetching the PR's code |
+| **Pull requests** | Read and write | Reading PRs, files, reviews and threads; posting comments, replies and reviews, resolving threads. Read-only is enough to browse, but posting then fails. |
+| **Metadata** | Read-only | Added automatically |
+
+Nothing else is needed: no Administration, Actions, Workflows, Issues or account permissions.
+
+A [classic token](https://github.com/settings/tokens/new) works too: tick `repo`, or only
+`public_repo` if you just review public repositories. It's broader than prr needs (`repo` also
+allows pushing code), so prefer a fine-grained one.
+
+With either kind:
+
+- **SAML single sign-on:** after creating the token, choose **Configure SSO → Authorize** next to
+  your organization on the tokens page, or GitHub answers as if the repositories didn't exist.
+- **Organization approval:** some organizations have to approve fine-grained tokens before they
+  work. The token shows as pending until an owner approves it.
+- **Review queue:** the home screen's "Review requested" and "Your pull requests" lists only
+  include repositories the token can see, so a fine-grained token limited to one organization
+  shows only that organization's PRs.
 
 ### Language servers
 
