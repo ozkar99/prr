@@ -156,7 +156,7 @@ pub fn launch(pr_label: &str, merge_base: &str, root: &str, session: &mcp::Sessi
     Ok(Launch { program: claude.to_string_lossy().into(), args, env })
 }
 
-/// `review-tool --mcp-stdio <url> <token>`: a stdio MCP server that forwards
+/// `review-tool-purr --mcp-stdio <url> <token>`: a stdio MCP server that forwards
 /// each newline-delimited JSON-RPC message to the app's HTTP MCP endpoint.
 pub fn run_stdio_bridge(url: &str, token: &str) {
     use std::io::{BufRead, Read};
@@ -171,7 +171,7 @@ pub fn run_stdio_bridge(url: &str, token: &str) {
             continue;
         }
         let Ok(mut stream) = TcpStream::connect(host) else {
-            eprintln!("review-tool: can't reach the app at {url} (is it still running?)");
+            eprintln!("review-tool-purr: can't reach the app at {url} (is it still running?)");
             break;
         };
         let request = format!(

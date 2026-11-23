@@ -28,7 +28,7 @@ brew install --cask review-tool
 gh auth login                                       # once: the app uses gh's GitHub login
 ```
 
-This puts **Review Tool** in Applications and the `review-tool` command on your `PATH`, and
+This puts **Review Tool** in Applications and the `review-tool-purr` command on your `PATH`, and
 installs the GitHub CLI (`gh`) and Node.js if you don't have them.
 
 Update with `brew upgrade --cask review-tool`. Uninstall with `brew uninstall --cask review-tool`
@@ -54,11 +54,11 @@ missing. In a PR, each server's state shows in the header; hover a **not install
 ## Opening PRs
 
 ```sh
-review-tool https://github.com/owner/repo/pull/123   # a PR URL
-review-tool owner/repo#123                           # a PR reference
-review-tool 123                                      # inside a clone: PR #123 of that repo
-review-tool                                          # inside a clone: the PR for your current branch
-review-tool --version                                # the installed version (-v); --help for usage
+review-tool-purr https://github.com/owner/repo/pull/123   # a PR URL
+review-tool-purr owner/repo#123                           # a PR reference
+review-tool-purr 123                                      # inside a clone: PR #123 of that repo
+review-tool-purr                                          # inside a clone: the PR for your current branch
+review-tool-purr --version                                # the installed version (-v); --help for usage
 ```
 
 Or open the app and pick a PR from **Review requested** / **Your pull requests**, or paste a URL
@@ -71,7 +71,7 @@ opens a new window, **⌘`** switches windows, and the app quits with its last w
 
 ### Where the code comes from
 
-- **Inside your own clone of the PR's repo**, `review-tool` reviews the PR right there: no second
+- **Inside your own clone of the PR's repo**, `review-tool-purr` reviews the PR right there: no second
   copy, and your language-server caches are reused. The PR's commits are fetched into your clone
   without adding branches or refs. If the clone isn't already at the PR, the app asks before
   switching it and switches it back when you close the PR. It never switches a clone with
@@ -169,7 +169,7 @@ The app gives the agent an MCP server, one per window, so an agent only sees its
 Claude Code in the panel is **read-only**: it can read and search the checkout and use these tools,
 but it has no shell, no editing tools and no web access, so it can't change files or send code
 anywhere. The PR can't configure it either: the repo's `.mcp.json` and `.claude/settings.json`
-(hooks, permissions) are ignored. It also runs as its own session when you start `review-tool`
+(hooks, permissions) are ignored. It also runs as its own session when you start `review-tool-purr`
 from inside Claude Code.
 
 ### Using another agent
@@ -256,7 +256,7 @@ cargo run -- --open-pr=https://github.com/owner/repo/pull/123
 
 The first build takes a few minutes. Xcode isn't needed: shaders compile when the app starts.
 
-`scripts/bundle-macos.sh` builds `dist/Review Tool.app`, a DMG, and `dist/review-tool` (a link to
+`scripts/bundle-macos.sh` builds `dist/Review Tool.app`, a DMG, and `dist/review-tool-purr` (a link to
 the app's binary, which is also the command); add `universal` for an Apple Silicon + Intel build,
 as releases use.
 
@@ -292,7 +292,7 @@ variables → Actions); the workflow uses them when present:
 
 | Piece | Where |
 |---|---|
-| `review-tool` command, single instance, windows | `src/cli.rs`, `src/instance.rs`, `src/windows.rs`, `src/main.rs` |
+| `review-tool-purr` command, single instance, windows | `src/cli.rs`, `src/instance.rs`, `src/windows.rs`, `src/main.rs` |
 | Home screen, setup check, storage | `src/home.rs`, `src/backend/deps.rs`, `src/backend/cleanup.rs` |
 | GitHub: review queue, PRs, threads, comments, reviews | `src/backend/github.rs` |
 | Checkouts: your clone, its copy-on-write worktrees, the app's own clones | `src/backend/git.rs` |
