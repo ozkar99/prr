@@ -28,13 +28,13 @@ pub struct Settings {
     pub sidebar_width: f32,
     /// The old side's share of a side-by-side diff.
     pub split_ratio: f32,
-    /// Mark PR checkouts as trusted in Claude Code, so it doesn't ask.
+    /// Mark PR checkouts as trusted in Claude Code, so it doesn't ask. Off by default.
     pub trust_claude_checkouts: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: true }
+        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: false }
     }
 }
 

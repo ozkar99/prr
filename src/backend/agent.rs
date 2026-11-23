@@ -128,7 +128,7 @@ pub fn launch(pr_label: &str, merge_base: &str, root: &str, session: &mcp::Sessi
         return Ok(Launch { program: shell, args: vec!["-l".into(), "-c".into(), command], env });
     }
 
-    // Skip Claude Code's "trust this folder?" for PR checkouts (Settings; on by default).
+    // Skip Claude Code's "trust this folder?" for PR checkouts (Settings; off by default).
     if crate::settings::load().trust_claude_checkouts
         && let Err(e) = trust_in_claude_code(Path::new(root))
     {
