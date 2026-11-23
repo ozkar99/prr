@@ -60,9 +60,6 @@ gh auth login
 Update with `brew upgrade --cask review-tool`; uninstall with `brew uninstall --cask review-tool`
 (add `--zap` to also remove its checkouts and settings).
 
-Installed the app some other way (e.g. dragged it from the DMG)? Open **Settings** (⌘,) and click
-**Install review-tool command** under **Command line**.
-
 On first launch the home screen checks for the tools the app uses and shows the install command
 for anything missing.
 
@@ -190,9 +187,8 @@ uses; the protections above apply only to the built-in Claude Code default.
 
 ### Settings
 
-**⌘,** opens Settings: the agent command, the `review-tool` command line tool (shows where it
-points; installs it if missing), the editor and terminal font sizes (applied right away), and the
-agent panel's height is remembered. They're saved in
+**⌘,** opens Settings: the agent command, the editor and terminal font sizes (applied right
+away), and the agent panel's height is remembered. They're saved in
 `~/Library/Application Support/review-tool/settings.json`.
 
 ## Troubleshooting
