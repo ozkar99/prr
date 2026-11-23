@@ -146,6 +146,10 @@ pub fn launch(pr_label: &str, merge_base: &str, root: &str, session: &mcp::Sessi
         // history comes from the app's MCP tools (git_log, git_blame, git_show).
         "--tools".into(),
         "Read,Grep,Glob".into(),
+        // Not the user's default mode (e.g. auto): nothing runs unasked here. The
+        // review-tool MCP tools are allowed below; their actions are confirmed in the app.
+        "--permission-mode".into(),
+        "manual".into(),
         "--allowedTools".into(),
         "mcp__review-tool".into(),
     ];
