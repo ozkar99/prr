@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.2.0 to build a universal (Apple Silicon + Intel) macOS app
+# Push a tag like v0.4.0 to build a universal (Apple Silicon + Intel) macOS app
 # and publish it as a GitHub Release (the Homebrew cask downloads it from there).
 # "Run workflow" builds without releasing.
 on:
@@ -17,24 +17,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Only for installing the two Node-based language servers into the bundle.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
-      - run: npm ci
+      - name: Build Review Tool.app and DMG
+        run: scripts/bundle-macos.sh universal
 
       # Signing and notarization run only when the Apple secrets are configured
-      # (see "Releasing" in the README); otherwise the build is unsigned.
-      - name: Signing configuration
+      # (see "Releasing" in the README); otherwise the app stays ad-hoc signed.
+      - name: Sign and notarize
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -43,31 +42,43 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -n "$APPLE_CERTIFICATE" ]; then
-            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-              printf '%s<<__EOF__\n%s\n__EOF__\n' "$v" "${!v}" >> "$GITHUB_ENV"
-            done
-            echo "Signing and notarizing."
-          else
-            echo "::warning::No Apple signing secrets: building an unsigned app."
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::No Apple signing secrets: the app is ad-hoc signed."
+            exit 0
           fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p ci "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p ci "$keychain"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$keychain"
+          app="dist/Review Tool.app"
+          codesign --force --deep --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app"
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          dmg="dist/Review.Tool_${version}_universal.dmg"
+          rm -f "$dmg"
+          stage=$(mktemp -d)
+          cp -R "$app" "$stage/"
+          ln -s /Applications "$stage/Applications"
+          hdiutil create -quiet -volname "Review Tool" -srcfolder "$stage" -ov -format UDZO "$dmg"
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$dmg"
 
-      - uses: tauri-apps/tauri-action@v0
-        id: tauri
+      - name: Publish the release
+        if: github.ref_type == 'tag'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --target universal-apple-darwin --bundles app,dmg
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: Review Tool ${{ github.ref_name }}
-          releaseBody: "Install or upgrade with Homebrew: see the README."
-          releaseDraft: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.dmg \
+            --title "Review Tool $GITHUB_REF_NAME" \
+            --notes "Install or upgrade with Homebrew: see the README."
 
       - name: Upload build (manual runs)
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: review-tool-macos-universal
-          path: |
-            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+          path: dist/*.dmg

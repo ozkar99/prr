@@ -73,6 +73,7 @@ top) and VS Code's Dark Modern theme for code. Compare screenshots of both apps 
 Done: `review-tool [PR]` CLI (src/cli.rs), single instance over a Unix socket
 (src/instance.rs), scripts/bundle-macos.sh (.app + DMG, ad-hoc signed, bundled
 pyright/bash-language-server; verified the release app runs).
-Left: release workflow for the native build, cask bump (sha after CI release),
-remove src/ + src-tauri/ + package.json and move native/ to the repo root,
-README update, polish (hover popup to Monaco's style, inline peek editor).
+Done since: native release workflow, web/Tauri code removed and the native app
+moved to the repo root, README, Monaco-style hover, ⌥F12 peek, mouse back button.
+Left: visual check of the hover (screen was locked), tag v0.4.0 + cask sha bump
+after merging to main (ask first).

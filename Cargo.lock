@@ -5074,7 +5074,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "review-tool-native"
+name = "review-tool"
 version = "0.4.0"
 dependencies = [
  "alacritty_terminal",

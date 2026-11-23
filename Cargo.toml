@@ -1,5 +1,5 @@
 [package]
-name = "review-tool-native"
+name = "review-tool"
 version = "0.4.0"
 edition = "2024"
 description = "Review GitHub pull requests with real code intelligence (native Rust UI)"

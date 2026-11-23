@@ -2,7 +2,7 @@
 
 A macOS desktop app for reviewing GitHub pull requests with real code intelligence.
 It checks out the PR, runs the language's own server against it (gopls, clangd, pyright,
-starpls), and shows the diff in VS Code's editor, so you get hover types, go-to-definition,
+starpls), and shows a VS Code-style side-by-side diff, so you get hover types, go-to-definition,
 peek and find-references while you review. Comments, replies and reviews go straight to GitHub.
 
 ![Review Tool reviewing a Go PR: side-by-side diff with hover type info from gopls, and Claude Code answering a question about the selected lines in the bottom panel](docs/screenshots/review-tool.png)
@@ -10,10 +10,11 @@ peek and find-references while you review. Comments, replies and reviews go stra
 *Reviewing a Go PR: the diff with hover docs from gopls (top), and Claude Code explaining the
 selected lines (bottom, ⌘L).*
 
-**You don't need VS Code installed.** The app bundles VS Code's editor code (editor, hovers,
-peek views, Markdown renderer) as npm packages via
-[`@codingame/monaco-vscode-api`](https://github.com/CodinGame/monaco-vscode-api). The app is built with
-[Tauri](https://tauri.app): a Rust backend and macOS's built-in WebView, so the app is ~30 MB.
+**It's a single native binary.** The whole app is Rust, with a GPU-rendered UI built on
+[GPUI](https://www.gpui.rs) (the framework behind the Zed editor) and
+[GPUI Kit](https://github.com/longbridge/gpui-component); no web view, no Electron. The binary is
+about 30 MB. The only extra pieces are two language servers that run on Node.js (pyright and
+bash-language-server), which ship inside the app.
 
 ## Setup
 
@@ -21,7 +22,7 @@ peek views, Markdown renderer) as npm packages via
 
 | Tool | Why | Install |
 |---|---|---|
-| macOS 10.15 or later, Apple Silicon or Intel | | |
+| macOS 11 or later, Apple Silicon or Intel | | |
 | Homebrew | installs and updates the app | [brew.sh](https://brew.sh) |
 | Xcode Command Line Tools | git (checking out PRs) and clangd (C/C++) | `xcode-select --install` |
 
@@ -104,6 +105,7 @@ touched by cleanup.
 - **⌘-click** or **F12**: go to definition. If it's in another file the PR changes, that file
   opens as a diff; otherwise it opens read-only. **⌥F12** peeks instead; **⇧F12** finds references.
 - **Ctrl+-**, the mouse back button, or **←** above the editor: go back.
+- Several definitions or references show as a list; click one to open it, **Esc** closes it.
 
 ### Reviewing
 
@@ -152,9 +154,11 @@ is review, not editing.
 
 #### Using another agent (Codex, Gemini CLI, …)
 
-Put the command to run in `~/.review-tool-agent-command` (one shell command; blank lines and `#`
-comments are ignored). It runs in your login shell, in the PR checkout. Delete the file to go back
-to Claude Code. Click **Restart** in the panel, or reopen the PR, after changing it.
+Open **Settings** (**⌘,**, the **Settings** link on the home screen, or **⚙** in a PR) and enter
+the command under **Agent command**. It runs in your login shell, in the PR checkout; clear it to go
+back to Claude Code. It applies the next time the agent starts (**Restart** in the panel, or reopen
+the PR). A command in `~/.review-tool-agent-command`, as older versions used, still works when the
+setting is empty.
 
 Every agent gets these environment variables:
 
@@ -181,6 +185,12 @@ claude --model sonnet --mcp-config "$REVIEW_TOOL_MCP_CONFIG" --strict-mcp-config
 An agent configured this way runs with whatever permissions and project settings it normally
 uses; the protections above apply only to the built-in Claude Code default.
 
+### Settings
+
+**⌘,** opens Settings: the agent command, the editor and terminal font sizes (applied right
+away), and the agent panel's height is remembered. They're saved in
+`~/Library/Application Support/review-tool/settings.json`.
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -189,8 +199,7 @@ uses; the protections above apply only to the built-in Claude Code default.
 | A server chip says **not installed** | Install it (hover the chip for the command), then reopen the PR. |
 | A server chip says **failed** | Hover it to see the server's error output. |
 | C++ types are wrong or headers don't resolve | clangd needs `compile_commands.json` (see below). |
-| `review-tool` says the app isn't built | Run `npm run build` in the checkout. |
-| The agent panel says the agent exited | Its output is in the panel. Check the command in `~/.review-tool-agent-command`, then **Restart**. |
+| The agent panel says the agent exited | Its output is in the panel. Check the agent command in **Settings**, then **Restart**. |
 
 ### C++ compile flags
 
@@ -208,59 +217,60 @@ PR code is untrusted, so the app never builds or runs it. In particular:
 - The editor is read-only and can only read PR checkouts plus the places go-to-definition leads:
   the Go stdlib and module cache, system and Homebrew headers, Python's stdlib and packages,
   and Bazel's external repo cache.
-- Markdown in comments and descriptions goes through VS Code's sanitizer, with command links disabled.
+- Markdown in comments and descriptions is rendered as text: no HTML, scripts or remote content other than avatars.
 
 ## Development
 
 ### Building from source
 
-Needs Rust ([rustup](https://rustup.rs)) and Node.js 20+.
+Needs Rust ([rustup](https://rustup.rs)); Node.js only to bundle the Python and shell language
+servers.
 
 ```sh
 git clone git@github.com:ozkar99/review-tool.git
 cd review-tool
-npm install
-npm run build
+cargo run --release -- --open-pr=https://github.com/owner/repo/pull/123
 ```
 
-The first build compiles the Rust dependencies and takes a few minutes. The result is
-`src-tauri/target/release/bundle/macos/Review Tool.app`.
+The first build compiles the dependencies and takes a few minutes. No Xcode is needed: shaders are
+compiled at run time.
+
+For Python and shell language features in development builds, install their servers once:
+
+```sh
+npm install --prefix target/language-servers pyright@1.1.414 bash-language-server@5.8.1
+```
+
+To build the app bundle and DMG (`dist/`), as releases do:
+
+```sh
+scripts/bundle-macos.sh             # this Mac's architecture
+scripts/bundle-macos.sh universal   # Apple Silicon + Intel
+```
 
 #### The `review-tool` command
 
 The app's own binary is the command. Link it onto your `PATH`:
 
 ```sh
-ln -sf "$PWD/src-tauri/target/release/bundle/macos/Review Tool.app/Contents/MacOS/review-tool" /opt/homebrew/bin/review-tool
+ln -sf "$PWD/dist/Review Tool.app/Contents/MacOS/review-tool" /opt/homebrew/bin/review-tool
 ```
 
-(Any directory on your `PATH` works; `/opt/homebrew/bin` is there on Apple Silicon Macs with
-Homebrew.) After pulling new changes, run `npm run build` again.
+The app allows a single instance: `review-tool <pr>` hands the PR to the open window. Development
+builds use a separate instance, so they don't interfere with the installed app.
 
-
-```sh
-npm run dev        # app with hot reload (frontend) and auto-rebuild (Rust)
-npm run typecheck
-npm run build      # release .app
-```
-
-While `npm run dev` is running, `review-tool <pr>` opens PRs in the dev window (the app allows
-a single instance). `npm run dev` sets `REVIEW_TOOL_APP=1` so the binary starts as the app even
-though it's launched from a terminal.
-
-For scripted testing, a development build started with `REVIEW_TOOL_DEBUG_EVAL=<port>` runs
-JavaScript POSTed to `http://127.0.0.1:<port>/` in the window and returns the JSON result
-(WebKit has no Chrome-style remote protocol). This hook isn't compiled into release builds.
+For scripted UI testing, a development build started with `REVIEW_TOOL_DEBUG_PORT=<port>` accepts
+JSON commands POSTed to `http://127.0.0.1:<port>/` (pointer moves, clicks, keys, typing,
+screenshots of its window; see `src/devdriver.rs`). This isn't compiled into release builds.
 
 Data lives in `~/Library/Application Support/review-tool/`: `repos/` has one blobless bare clone
-per repo, `worktrees/` one checkout per PR (see `src-tauri/src/git.rs`; cleanup in
-`src-tauri/src/cleanup.rs`).
+per repo, `worktrees/` one checkout per PR (see `src/backend/git.rs`; cleanup in
+`src/backend/cleanup.rs`).
 
 ### Releasing
 
-1. Bump `version` in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`;
-   commit and push.
-2. Tag it: `git tag -a v0.3.0 -m "Review Tool v0.3.0" && git push origin v0.3.0`. CI
+1. Bump `version` in `Cargo.toml`; commit and push.
+2. Tag it: `git tag -a v0.4.0 -m "Review Tool v0.4.0" && git push origin v0.4.0`. CI
    (`.github/workflows/release.yml`) builds a universal (Apple Silicon + Intel) app and publishes
    it as a GitHub Release.
 3. Point the cask at it: in `Casks/review-tool.rb`, set `version` and set `sha256` to the
@@ -287,16 +297,15 @@ prompt. To sign and notarize with an Apple Developer ID instead, add these repos
 
 | Piece | Where |
 |---|---|
-| `review-tool` command: resolves the PR with `gh`, launches or reuses the app | `src-tauri/src/cli.rs` |
+| `review-tool` command: resolves the PR with `gh`, launches or reuses the app | `src/cli.rs`, `src/instance.rs` |
 | Homebrew cask (this repo is also the tap) | `Casks/review-tool.rb` |
-| Setup check (git, gh login, language servers, agent) | `src-tauri/src/deps.rs`, `src/renderer/src/SetupCheck.tsx` |
-| App setup, commands, single instance, window | `src-tauri/src/lib.rs` |
-| GitHub API: review queue, PR files, threads, comments, submitting reviews | `src-tauri/src/github.rs` |
-| Bare clone per repo + `git worktree` per PR, diff against the merge-base | `src-tauri/src/git.rs` |
-| Language servers spawned per PR; LSP messages relayed to the page over a Tauri Channel | `src-tauri/src/lsp.rs` |
-| Read-only file access for the editor | `src-tauri/src/fsaccess.rs` |
-| `window.api`: the page's interface to the Rust commands | `src/renderer/src/api.ts` |
-| VS Code services, grammars (incl. Starlark), disk-backed `file://` provider | `src/renderer/src/editor/` |
-| Diff / file editor, cross-file navigation, back stack | `src/renderer/src/editor/EditorHost.ts` |
-| Review threads in the editor, sidebar, conversation, review panel | `src/renderer/src/review/` |
-| Agent panel: launch command, MCP context server, terminal | `src-tauri/src/agent.rs`, `mcp.rs`, `pty.rs`, `src/renderer/src/agent/` |
+| Window, home screen, setup check, storage | `src/main.rs`, `src/app.rs`, `src/home.rs`, `src/backend/deps.rs` |
+| GitHub API: review queue, PR files, threads, comments, submitting reviews | `src/backend/github.rs` |
+| Bare clone per repo + `git worktree` per PR, diff against the merge-base | `src/backend/git.rs` |
+| Side-by-side diff (vendored from GPUI Kit, with token hover/click and annotations) | `src/diffview/` |
+| Syntax highlighting (tree-sitter, VS Code Dark Modern colors) | `src/highlight.rs` |
+| Language servers per PR: hover, definition, references | `src/lsp.rs` |
+| PR view: sidebar, navigation, back stack, hover and peek popups | `src/pr_view.rs` |
+| Review threads, composer, conversation, review panel | `src/review.rs` |
+| Agent panel: terminal (alacritty_terminal), launch command, MCP context server | `src/terminal.rs`, `src/backend/agent.rs`, `src/backend/mcp.rs` |
+| Settings | `src/settings.rs` |

@@ -33,7 +33,6 @@ cask "review-tool" do
   zap trash: [
     "~/Library/Application Support/review-tool",
     "~/Library/Caches/com.ozkar99.review-tool",
-    "~/Library/WebKit/com.ozkar99.review-tool",
   ]
 
   caveats <<~EOS

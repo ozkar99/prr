@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-actions!(review_tool, [GoBack, GoToDefinition, FindReferences, ClosePopup, ToggleAgent, AskAgent, ExplainAgent, AddComment]);
+actions!(review_tool, [GoBack, GoToDefinition, PeekDefinition, FindReferences, ClosePopup, ToggleAgent, AskAgent, ExplainAgent, AddComment]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -34,6 +34,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-alt-c", AddComment, Some("PrView && !Terminal")),
         KeyBinding::new("f12", GoToDefinition, None),
         KeyBinding::new("shift-f12", FindReferences, None),
+        KeyBinding::new("alt-f12", PeekDefinition, None),
         KeyBinding::new("escape", ClosePopup, Some("PrView")),
     ]);
 }
@@ -872,6 +873,11 @@ impl PrView {
     }
 
     fn go_to_definition(&mut self, hit: TokenHit, cx: &mut Context<Self>) {
+        self.definition(hit, false, cx);
+    }
+
+    /// Go to (or, with `peek`, list) the definition of the symbol at `hit`.
+    fn definition(&mut self, hit: TokenHit, peek: bool, cx: &mut Context<Self>) {
         let Some((abs, language, line, character, client)) = self.resolve(&hit) else { return };
         self.hover = None;
         let fut = backend::task(async move { client.definition(&abs, language, line, character).await });
@@ -880,7 +886,8 @@ impl PrView {
             let Ok(locations) = fut.await else { return };
             this.update(cx, |this, cx| match locations.len() {
                 0 => {}
-                1 => this.open_location(&locations[0].path, locations[0].line as usize + 1, cx),
+                1 if !peek => this.open_location(&locations[0].path, locations[0].line as usize + 1, cx),
+                1 => this.show_peek(point, "Definition".into(), locations, cx),
                 n => this.show_peek(point, format!("{n} definitions"), locations, cx),
             })
             .ok();
@@ -914,6 +921,12 @@ impl PrView {
             .collect();
         self.peek = Some(Peek { point, title: title.into(), items });
         cx.notify();
+    }
+
+    fn on_peek_definition(&mut self, _: &PeekDefinition, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(hit) = self.last_token.clone() {
+            self.definition(hit, true, cx);
+        }
     }
 
     fn on_find_references(&mut self, _: &FindReferences, _: &mut Window, cx: &mut Context<Self>) {
@@ -1315,6 +1328,7 @@ impl PrView {
                         .context_menu(move |menu, _, _| {
                             menu.action_context(focus.clone())
                                 .menu("Go to Definition", Box::new(GoToDefinition))
+                                .menu("Peek Definition", Box::new(PeekDefinition))
                                 .menu("Find All References", Box::new(FindReferences))
                                 .separator()
                                 .menu("Add Review Comment", Box::new(AddComment))
@@ -1645,6 +1659,12 @@ impl Render for PrView {
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::on_go_to_definition))
             .on_action(cx.listener(Self::on_find_references))
+            .on_action(cx.listener(Self::on_peek_definition))
+            // The mouse's back button goes back, like VS Code.
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, window, cx| this.go_back(&GoBack, window, cx)),
+            )
             .on_action(cx.listener(Self::close_popup))
             .on_action(cx.listener(Self::toggle_agent))
             .on_action(cx.listener(|this, _: &AskAgent, window, cx| this.ask_agent(false, window, cx)))
