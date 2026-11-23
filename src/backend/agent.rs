@@ -59,10 +59,6 @@ pub fn info() -> AgentInfo {
     AgentInfo { name, command, config_path: config_path().to_string_lossy().into() }
 }
 
-pub fn selection_file() -> PathBuf {
-    data_dir().join("selection.json")
-}
-
 fn instructions(pr_label: &str, merge_base: &str) -> String {
     format!(
         "You are running inside Review Tool, a desktop app for reviewing GitHub pull requests. \
@@ -79,7 +75,8 @@ fn instructions(pr_label: &str, merge_base: &str) -> String {
 /// cleared environment. Readable only by the user (it contains the token).
 fn write_stdio_bridge(url: &str, token: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let path = data_dir().join("mcp-stdio.sh");
+    // One per window (session), named by the start of its token.
+    let path = data_dir().join(format!("mcp-stdio-{}.sh", &token[..12.min(token.len())]));
     std::fs::create_dir_all(data_dir()).map_err(|e| e.to_string())?;
     let quote = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
     let script = format!("#!/bin/sh\nexec {} --mcp-stdio {} {}\n", quote(&exe.to_string_lossy()), quote(url), quote(token));
@@ -96,9 +93,9 @@ fn write_stdio_bridge(url: &str, token: &str) -> Result<PathBuf, String> {
 }
 
 
-pub fn launch(pr_label: &str, merge_base: &str, root: &str) -> Result<Launch, String> {
-    let (port, token) = mcp::ensure_started()?;
-    let url = format!("http://127.0.0.1:{port}/mcp");
+/// The agent command for one PR window, wired to that window's MCP session.
+pub fn launch(pr_label: &str, merge_base: &str, root: &str, session: &mcp::Session) -> Result<Launch, String> {
+    let (url, token) = (session.url(), session.token.clone());
     let mcp_config = serde_json::json!({
         "mcpServers": { "review-tool": {
             "type": "http",
@@ -120,7 +117,7 @@ pub fn launch(pr_label: &str, merge_base: &str, root: &str) -> Result<Launch, St
         // Claude Code-style --mcp-config JSON (also the shape several other agents use).
         ("REVIEW_TOOL_MCP_CONFIG".into(), mcp_config.clone()),
         ("REVIEW_TOOL_MCP_STDIO".into(), bridge.to_string_lossy().into()),
-        ("REVIEW_TOOL_SELECTION_FILE".into(), selection_file().to_string_lossy().into()),
+        ("REVIEW_TOOL_SELECTION_FILE".into(), session.selection_file().to_string_lossy().into()),
     ];
 
     if let Some(command) = configured_command() {

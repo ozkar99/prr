@@ -10,6 +10,8 @@ pub struct AppView {
     pr: Option<Entity<PrView>>,
     settings: Option<Entity<SettingsView>>,
     focus: FocusHandle,
+    /// The PR this window was asked to open (owner, repo, number; lowercase), while loading or open.
+    opening: Option<(String, String, u64)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -22,13 +24,30 @@ impl AppView {
         let focus = cx.focus_handle();
         // App-wide shortcuts (⌘,) need something focused from the start.
         window.focus(&focus, cx);
-        Self { home, pr: None, settings: None, focus, _subscriptions: vec![sub] }
+        Self { home, pr: None, settings: None, focus, opening: None, _subscriptions: vec![sub] }
     }
 
     /// Opens a PR (from the command line or another launch).
     pub fn open(&mut self, pr: crate::backend::types::PRRef, window: &mut Window, cx: &mut Context<Self>) {
         self.close_pr(cx);
+        self.opening = Some((pr.owner.to_lowercase(), pr.repo.to_lowercase(), pr.number));
         self.home.update(cx, |home, cx| home.open(pr.owner, pr.repo, pr.number, pr.local_repo, window, cx));
+    }
+
+    /// The PR this window shows or is loading.
+    pub fn showing(&self, cx: &App) -> Option<(String, String, u64)> {
+        match &self.pr {
+            Some(pr) => {
+                let pr = &pr.read(cx).pr;
+                Some((pr.owner.to_lowercase(), pr.repo.to_lowercase(), pr.number))
+            }
+            None => self.opening.clone().filter(|_| self.home.read(cx).is_busy()),
+        }
+    }
+
+    /// On the home screen and not opening anything: a later PR can use this window.
+    pub fn is_free(&self, cx: &App) -> bool {
+        self.pr.is_none() && !self.home.read(cx).is_busy() && self.settings.is_none()
     }
 
     fn show_pr(&mut self, pr: crate::backend::types::PRDetails, checkout: crate::backend::types::Checkout, window: &mut Window, cx: &mut Context<Self>) {
@@ -42,7 +61,8 @@ impl AppView {
     }
 
     /// Leaves the open PR; if it switched the user's own clone, switches it back.
-    fn close_pr(&mut self, cx: &mut Context<Self>) {
+    pub fn close_pr(&mut self, cx: &mut Context<Self>) {
+        self.opening = None;
         let Some(view) = self.pr.take() else { return };
         view.update(cx, |v, cx| v.close(cx));
         let (local, head_sha, number) = {
@@ -106,6 +126,11 @@ impl Render for AppView {
             .relative()
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(|this, _: &crate::windows::CloseWindow, window, cx| {
+                this.close_pr(cx);
+                window.remove_window();
+            }))
+            .on_action(|_: &crate::windows::MinimizeWindow, window, _| window.minimize_window())
             .child(match &self.pr {
                 Some(pr) => pr.clone().into_any_element(),
                 None => self.home.clone().into_any_element(),

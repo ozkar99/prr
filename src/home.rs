@@ -39,6 +39,11 @@ pub struct Home {
 impl EventEmitter<HomeEvent> for Home {}
 
 impl Home {
+    /// Whether it's busy opening a PR.
+    pub fn is_busy(&self) -> bool {
+        self.busy.is_some()
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Paste a PR URL or owner/repo#123"));
         let subscription = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
