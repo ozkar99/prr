@@ -5,8 +5,8 @@
 #   brew trust --cask ozkar99/review-tool/review-tool
 #   brew install --cask review-tool
 cask "review-tool" do
-  version "4.0.0"
-  sha256 "798fefc49abbf9f1a60d9a6ae7aaf9ddeeef7c5825ae015b0924e18344e234db"
+  version "4.0.1"
+  sha256 "acbb602ebf56b69c8f329978dff2351699f34386c09bf404a5f9e356065697be"
 
   url "https://github.com/ozkar99/review-tool/releases/download/v#{version}/Review.Tool_#{version}_universal.dmg"
   name "Review Tool"
