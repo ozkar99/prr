@@ -39,6 +39,11 @@ next to a personal one), pick the one prr uses in **Settings → GitHub account*
 gh's active account. prr's own clones use the same account over HTTPS, so SSH keys aren't needed,
 and your gh and git settings aren't changed.
 
+prr runs `gh` the way your terminal does, through your login shell, so if your company wraps `gh`
+in a shell function or alias (to set a company token, for example), prr uses the wrapper too. To run
+something else, set **Settings → gh command** to a path (`/usr/local/bin/corp-gh`) or a command
+name.
+
 ### Language servers
 
 Syntax highlighting works without them; they add hover, navigation and references. Install the
