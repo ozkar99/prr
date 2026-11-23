@@ -63,10 +63,10 @@ fn instructions(pr_label: &str, merge_base: &str) -> String {
     format!(
         "You are running inside Review Tool, a desktop app for reviewing GitHub pull requests. \
          The working directory is a checkout of {pr_label} at the PR's head commit; the PR's changes are the diff against merge-base {merge_base}. \
-         The user is reviewing this PR, not editing it: answer questions about the code and the change, and don't modify files. \
+         The user is reviewing this PR, not editing it: you have read-only access (reading and searching files, and the review-tool tools); you can't run commands or change files. \
          When the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\"), call the review-tool get_selection tool first \
          (or read the JSON file in $REVIEW_TOOL_SELECTION_FILE if you have no MCP tools). \
-         Use get_pr for the PR description and changed files, and get_file_diff to see what changed in a file."
+         Use get_pr for the PR description and changed files, get_file_diff to see what changed in a file, and git_log, git_blame and git_show for history."
     )
 }
 
@@ -139,16 +139,13 @@ pub fn launch(pr_label: &str, merge_base: &str, root: &str, session: &mcp::Sessi
         "user".into(),
         "--append-system-prompt".into(),
         instructions,
+        // Read-only: only these built-in tools exist in the session (no shell, no
+        // editing, no web), so no permission mode can bring the others back. Git
+        // history comes from the app's MCP tools (git_log, git_blame, git_show).
+        "--tools".into(),
+        "Read,Grep,Glob".into(),
         "--allowedTools".into(),
         "mcp__review-tool".into(),
-        "Bash(git diff:*)".into(),
-        "Bash(git log:*)".into(),
-        "Bash(git show:*)".into(),
-        "Bash(git blame:*)".into(),
-        "--disallowedTools".into(),
-        "Edit".into(),
-        "Write".into(),
-        "NotebookEdit".into(),
     ];
     Ok(Launch { program: claude.to_string_lossy().into(), args, env })
 }

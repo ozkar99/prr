@@ -212,6 +212,49 @@ fn tools() -> Value {
             "annotations": read_only
         },
         {
+            "name": "git_log",
+            "description": "Commit history (read-only `git log`): the PR's own commits by default (merge-base..HEAD), or the recent history of a file or directory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Repo-relative file or directory. Omit for the whole repo." },
+                    "pr_only": { "type": "boolean", "description": "Only the PR's commits (default true). False for history before the PR too." },
+                    "max_count": { "type": "integer", "description": "At most this many commits (default 30, max 200)." }
+                },
+                "additionalProperties": false
+            },
+            "annotations": read_only
+        },
+        {
+            "name": "git_blame",
+            "description": "Who last changed each line of a file, and in which commit (read-only `git blame` at the PR head).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Repo-relative file." },
+                    "start_line": { "type": "integer" },
+                    "end_line": { "type": "integer" }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            },
+            "annotations": read_only
+        },
+        {
+            "name": "git_show",
+            "description": "One commit's message and changes (read-only `git show`), optionally limited to one path.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "commit": { "type": "string", "description": "A commit hash (4-40 hex characters)." },
+                    "path": { "type": "string", "description": "Repo-relative path to limit the diff to." }
+                },
+                "required": ["commit"],
+                "additionalProperties": false
+            },
+            "annotations": read_only
+        },
+        {
             "name": "get_file_diff",
             "description": "The PR's unified diff for one file (against the merge-base, like GitHub shows it). Defaults to the file the user has open.",
             "inputSchema": {
@@ -259,6 +302,101 @@ fn call_tool(name: &str, args: &Value, token: &str) -> Result<String, String> {
             let diff = String::from_utf8_lossy(&out.stdout).into_owned();
             Ok(if diff.trim().is_empty() { format!("{path} has no changes in this PR.") } else { diff })
         }
+        "git_log" | "git_blame" | "git_show" => {
+            let r = review();
+            let root = r["root"].as_str().ok_or("No pull request is open.")?.to_string();
+            let base = r["mergeBase"].as_str().unwrap_or("").to_string();
+            let path = match args["path"].as_str() {
+                Some(p) => Some(safe_path(p)?),
+                None => None,
+            };
+            let mut cmd: Vec<String> = vec!["--no-pager".into()];
+            match name {
+                "git_log" => {
+                    let n = args["max_count"].as_u64().unwrap_or(30).clamp(1, 200);
+                    cmd.extend(["log".into(), "--no-color".into(), format!("--max-count={n}"), "--format=%h %ad %an%n    %s".into(), "--date=short".into()]);
+                    if args["pr_only"].as_bool().unwrap_or(true) && !base.is_empty() {
+                        cmd.push(format!("{base}..HEAD"));
+                    }
+                }
+                "git_blame" => {
+                    if path.is_none() {
+                        return Err("git_blame needs a path.".into());
+                    }
+                    cmd.extend(["blame".into(), "--date=short".into()]);
+                    if let Some(start) = args["start_line"].as_u64() {
+                        let end = args["end_line"].as_u64().unwrap_or(start).max(start);
+                        cmd.push(format!("-L{start},{end}"));
+                    }
+                    cmd.push("HEAD".into());
+                }
+                _ => {
+                    let commit = args["commit"].as_str().unwrap_or("");
+                    if !(4..=40).contains(&commit.len()) || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
+                        return Err("commit must be a hash (4-40 hex characters).".into());
+                    }
+                    cmd.extend(["show".into(), "--no-color".into(), "--stat".into(), "--patch".into(), commit.into()]);
+                }
+            }
+            cmd.push("--".into());
+            cmd.extend(path);
+            let out = std::process::Command::new("git").args(&cmd).current_dir(&root).output().map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+            }
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            if text.len() > 60_000 {
+                let mut cut = 60_000;
+                while !text.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                text.truncate(cut);
+                text.push_str("\n… (truncated)");
+            }
+            Ok(if text.trim().is_empty() { "No results.".into() } else { text })
+        }
         other => Err(format!("Unknown tool: {other}")),
+    }
+}
+
+/// A repo-relative path an agent passed: no options, no absolute paths, no `..`.
+fn safe_path(p: &str) -> Result<String, String> {
+    let p = p.trim();
+    if p.is_empty() || p.starts_with('-') || p.starts_with('/') || p.split('/').any(|c| c == "..") {
+        return Err(format!("Not a repo-relative path: {p}"));
+    }
+    Ok(p.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_tools_are_read_only_and_reject_unsafe_arguments() {
+        let session = new_session().unwrap();
+        let root = env!("CARGO_MANIFEST_DIR");
+        let head = std::process::Command::new("git").args(["rev-parse", "HEAD~3"]).current_dir(root).output().unwrap();
+        let base = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        session.set_review(json!({ "root": root, "mergeBase": base, "pr": {} }));
+        let call = |name: &str, args: Value| call_tool(name, &args, &session.token);
+
+        let log = call("git_log", json!({})).unwrap();
+        assert_eq!(log.lines().filter(|l| !l.starts_with(' ')).count(), 3, "{log}");
+        assert!(call("git_log", json!({ "pr_only": false, "max_count": 2, "path": "README.md" })).unwrap().lines().count() <= 4);
+        let blame = call("git_blame", json!({ "path": "README.md", "start_line": 1, "end_line": 2 })).unwrap();
+        assert_eq!(blame.lines().count(), 2, "{blame}");
+        // The last commit that changed the README, limited to that file.
+        let last = std::process::Command::new("git").args(["log", "-1", "--format=%h", "--", "README.md"]).current_dir(root).output().unwrap();
+        let last = String::from_utf8_lossy(&last.stdout).trim().to_string();
+        let show = call("git_show", json!({ "commit": last, "path": "README.md" })).unwrap();
+        assert!(show.starts_with("commit "), "{show}");
+
+        for bad in ["../etc/passwd", "/etc/passwd", "--output=/tmp/x", "-p"] {
+            assert!(call("git_blame", json!({ "path": bad })).is_err(), "{bad}");
+        }
+        assert!(call("git_show", json!({ "commit": "HEAD; rm -rf /" })).is_err());
+        assert!(call("git_show", json!({ "commit": "--output=/tmp/x" })).is_err());
+        session.end();
     }
 }
