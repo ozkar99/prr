@@ -16,6 +16,20 @@ It's a single native Rust binary with a GPU-rendered UI built on [GPUI](https://
 [GPUI Kit](https://github.com/longbridge/gpui-component). The Python and shell language servers
 run on Node.js and ship inside the app.
 
+## Supported languages
+
+| Language | Files | Syntax colors | Code intelligence (hover, definition, references) |
+|---|---|---|---|
+| Go | `.go` | ✓ | ✓ gopls |
+| C / C++ | `.c` `.h` `.cc` `.cpp` `.cxx` `.hpp` `.hh` `.ipp` `.inl` `.m` `.mm` | ✓ | ✓ clangd |
+| Python | `.py` `.pyi` | ✓ | ✓ pyright (included) |
+| Shell | `.sh` `.bash` `.zsh` `.ksh`, `.bashrc` `.zshrc` `.profile` … | ✓ | ✓ bash-language-server (included) |
+| Starlark / Bazel | `BUILD` `WORKSPACE` `MODULE.bazel` `.bzl` `.bazel` `.star` | ✓ | ✓ starpls |
+
+Any other file shows as a plain diff, and you can still comment on it and review it as usual. Go,
+C/C++ and Starlark need their server installed ([below](#language-servers)); the Python and shell
+servers come with the app.
+
 ## Install
 
 Requirements: macOS 11 or later (Apple Silicon or Intel), [Homebrew](https://brew.sh), and the
