@@ -1577,7 +1577,7 @@ impl PrView {
                         div()
                             .flex()
                             .h(px(280.))
-                            .child(div().id("peek-preview").flex_1().min_w_0().overflow_hidden().pt(px(4.)).child(preview))
+                            .child(div().id("peek-preview").flex_1().min_w_0().overflow_hidden().pt(px(4.)).cursor_text().child(preview))
                             .child(
                                 div()
                                     .id("peek-list")
@@ -1601,7 +1601,7 @@ impl PrView {
         let at = point(hover.point.x, hover.point.y + px(10.));
         let mut parts = div().flex().flex_col();
         for (i, part) in hover_parts(&hover.markdown).into_iter().enumerate() {
-            let section = div().px(px(8.)).py(px(4.)).when(i > 0, |el| el.border_t_1().border_color(hsla(0x454545)));
+            let section = div().px(px(8.)).py(px(4.)).cursor_text().when(i > 0, |el| el.border_t_1().border_color(hsla(0x454545)));
             parts = parts.child(match part {
                 HoverPart::Code(language, code) => {
                     let language = match language.as_str() {
