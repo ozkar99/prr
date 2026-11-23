@@ -103,7 +103,19 @@ pub fn route(request: Request, cx: &mut App) {
         }
         return;
     };
+    let mut pr = pr;
     let key = (pr.owner.to_lowercase(), pr.repo.to_lowercase(), pr.number);
+    // Your clone can only be on one PR: if another window is reviewing in it,
+    // this PR uses the app's own checkout instead of switching it underneath.
+    if let Some(local) = pr.local_repo.clone() {
+        let busy = windows.iter().filter_map(|(_, v)| v.upgrade()).any(|v| {
+            let v = v.read(cx);
+            v.local_clone(cx).as_deref() == Some(local.as_str()) && v.showing(cx).as_ref() != Some(&key)
+        });
+        if busy {
+            pr.local_repo = None;
+        }
+    }
     // Already open (or loading): bring that window forward.
     for (handle, view) in &windows {
         let Some(view) = view.upgrade() else { continue };
@@ -137,4 +149,18 @@ fn cycle(cx: &mut App) {
     let ix = active.and_then(|a| windows.iter().position(|w| *w == a)).unwrap_or(0);
     let next = windows[(ix + 1) % windows.len()];
     let _ = next.update(cx, |_, window, _| window.activate_window());
+}
+
+/// For the dev driver: each window and the PR it shows.
+#[cfg(debug_assertions)]
+pub fn describe(cx: &App) -> Vec<String> {
+    cx.global::<Windows>()
+        .0
+        .iter()
+        .filter_map(|(_, v)| v.upgrade())
+        .map(|v| match v.read(cx).showing(cx) {
+            Some((o, r, n)) => format!("{o}/{r}#{n}"),
+            None => "home".into(),
+        })
+        .collect()
 }

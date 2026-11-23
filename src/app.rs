@@ -45,6 +45,11 @@ impl AppView {
         }
     }
 
+    /// Your own clone this window's PR is reviewed in, if any.
+    pub fn local_clone(&self, cx: &App) -> Option<String> {
+        self.pr.as_ref()?.read(cx).checkout.local.as_ref().map(|l| l.path.clone())
+    }
+
     /// On the home screen and not opening anything: a later PR can use this window.
     pub fn is_free(&self, cx: &App) -> bool {
         self.pr.is_none() && !self.home.read(cx).is_busy() && self.settings.is_none()
