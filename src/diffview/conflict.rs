@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use gpui::SharedString;
+use super::DiffSide;
 
 use super::{
     DiffFile, DiffFileStatus, DiffParseError,
@@ -145,6 +146,28 @@ impl DiffFile {
             DiffFileStatus::Unchanged,
             FileSide::new(Some(path.clone()), String::new(), []),
             FileSide::new(Some(path), text.to_owned(), lines),
+            pairs,
+            Vec::new(),
+            Vec::new(),
+            false,
+        )
+    }
+
+    /// A whole file in one column on `side`: the new side for added files and
+    /// plain files, the old side for deleted ones (so comments land on GitHub's
+    /// matching side). Added for the review app.
+    pub fn whole(path: impl Into<SharedString>, text: &str, side: DiffSide) -> Self {
+        if side == DiffSide::Modified {
+            return Self::unchanged(path, text);
+        }
+        let path = path.into();
+        let ranges = line_ranges(text);
+        let pairs = (0..ranges.len()).map(|ix| LinePair::new(Some(ix), None, false)).collect();
+        let lines = ranges.into_iter().enumerate().map(|(ix, range)| (ix + 1, range));
+        DiffFile::new(
+            DiffFileStatus::Unchanged,
+            FileSide::new(Some(path.clone()), text.to_owned(), lines),
+            FileSide::new(Some(path), String::new(), []),
             pairs,
             Vec::new(),
             Vec::new(),
