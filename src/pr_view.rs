@@ -894,7 +894,7 @@ impl PrView {
                                             .border_color(hsla(theme::BORDER))
                                             .rounded(px(8.))
                                             .text_color(hsla(color))
-                                            .child(text)
+                                            .map(|el| if color == theme::DEL { el.child(ui::copy_error("agent-error", text)) } else { el.child(text) })
                                             .child(button),
                                     )
                                 })),
@@ -1698,7 +1698,7 @@ impl PrView {
             .child(title("Conversation", format!("({})", state.as_ref().map(|s| s.conversation.len().to_string()).unwrap_or("…".into()))))
             .child(conv)
             .child(title("Changed files", format!("({})", pr.files.len())))
-            .children(error.map(|e| div().px(px(12.)).child(ui::error_text(format!("Couldn't load comments: {e}")))))
+            .children(error.map(|e| div().px(px(12.)).child(ui::copy_error("comments-error", format!("Couldn't load comments: {e}")))))
             .child(files);
         if !orphans.is_empty() {
             sidebar = sidebar.child(title("Comments on files no longer in the diff", format!("({})", orphans.len())));

@@ -95,11 +95,19 @@ pub fn status_chip(id: &str, server: &str, status: &ServerStatus, note: Option<&
     let tip = tip.or_else(|| note.filter(|_| running).map(|(_, long)| long.clone()));
     let chip = ui::chip(label, color);
     match tip {
-        Some(tip) => div()
-            .id(SharedString::from(format!("lsp-{id}")))
-            .child(chip)
-            .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
-            .into_any_element(),
+        // Hover for the whole message; click to copy the install command (or the error).
+        Some(tip) => {
+            let copy = tip.split_once("To install: ").map(|(_, cmd)| cmd.to_string()).unwrap_or(tip.clone());
+            let hint = if tip.contains("To install: ") { "Click to copy the install command." } else { "Click to copy." };
+            let tip = format!("{tip}\n\n{hint}");
+            div()
+                .id(SharedString::from(format!("lsp-{id}")))
+                .cursor_pointer()
+                .child(chip)
+                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))
+                .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                .into_any_element()
+        }
         None => chip.into_any_element(),
     }
 }
