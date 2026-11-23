@@ -34,6 +34,10 @@ impl AppView {
         self.home.update(cx, |home, cx| home.open(pr.owner, pr.repo, pr.number, pr.local_repo, pr.local_worktree, window, cx));
     }
 
+    pub fn pr_view(&self) -> Option<Entity<PrView>> {
+        self.pr.clone()
+    }
+
     /// The PR this window shows or is loading.
     pub fn showing(&self, cx: &App) -> Option<(String, String, u64)> {
         match &self.pr {

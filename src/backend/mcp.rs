@@ -19,6 +19,37 @@ struct Context {
 
 /// Sessions by bearer token.
 static SESSIONS: Mutex<Option<HashMap<String, Context>>> = Mutex::new(None);
+
+/// Something the agent asks the PR window to do on GitHub (or read from it).
+/// Every change is confirmed by the user in the window first.
+#[derive(Clone, Debug)]
+pub enum ReviewAction {
+    /// The PR's review threads (read-only; no confirmation).
+    Threads,
+    Comment { path: String, side: String, line: u64, start_line: Option<u64>, body: String },
+    Reply { thread_id: String, body: String },
+    Resolve { thread_id: String, resolved: bool },
+    PrComment { body: String },
+    /// event: APPROVE, REQUEST_CHANGES or COMMENT.
+    Submit { event: &'static str, body: String },
+}
+
+pub struct ActionRequest {
+    pub action: ReviewAction,
+    pub reply: std::sync::mpsc::Sender<Result<String, String>>,
+}
+
+type ActionSender = futures::channel::mpsc::UnboundedSender<ActionRequest>;
+static ACTIONS: Mutex<Option<HashMap<String, ActionSender>>> = Mutex::new(None);
+
+/// Hands an action to the session's window and waits for the outcome (the user
+/// may take a while to confirm).
+fn run_action(token: &str, action: ReviewAction) -> Result<String, String> {
+    let sender = ACTIONS.lock().unwrap().as_ref().and_then(|m| m.get(token).cloned()).ok_or("The review window isn't available.")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    sender.unbounded_send(ActionRequest { action, reply: tx }).map_err(|_| "The review window was closed.".to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(30 * 60)).map_err(|_| "No answer from the user in the app.".to_string())?
+}
 static PORT: OnceLock<u16> = OnceLock::new();
 
 /// One PR window's connection to the MCP server.
@@ -51,9 +82,17 @@ impl Session {
         write_selection_file(&self.token);
     }
 
+    /// Requests from this session's agent to act on the review; the window handles them.
+    pub fn actions(&self) -> futures::channel::mpsc::UnboundedReceiver<ActionRequest> {
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        ACTIONS.lock().unwrap().get_or_insert_with(HashMap::new).insert(self.token.clone(), tx);
+        rx
+    }
+
     /// The window closed: forget its context and its selection file.
     pub fn end(&self) {
         SESSIONS.lock().unwrap().get_or_insert_with(HashMap::new).remove(&self.token);
+        ACTIONS.lock().unwrap().get_or_insert_with(HashMap::new).remove(&self.token);
         let _ = std::fs::remove_file(self.selection_file());
     }
 }
@@ -177,7 +216,7 @@ fn rpc(msg: &Value, token: &str) -> Option<Value> {
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "review-tool", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tools for the Review Tool app the user is reviewing this pull request in. Call get_selection whenever the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\")."
+            "instructions": "Tools for the Review Tool app the user is reviewing this pull request in. Call get_selection whenever the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\"). You can also act on the review for the user (comment, reply, resolve threads, submit the review); each action is shown to the user in the app and only happens if they confirm it there, so call the tool when asked instead of asking for confirmation in chat."
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tools() }),
@@ -198,6 +237,7 @@ fn rpc(msg: &Value, token: &str) -> Option<Value> {
 
 fn tools() -> Value {
     let read_only = json!({ "readOnlyHint": true });
+    let write = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
     json!([
         {
             "name": "get_selection",
@@ -255,6 +295,76 @@ fn tools() -> Value {
             "annotations": read_only
         },
         {
+            "name": "get_review_threads",
+            "description": "The PR's review comment threads: id (for reply_to_thread / resolve_thread), file, line, side, resolved/outdated, and the comments (author, body, whether pending in the user's review).",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "annotations": read_only
+        },
+        {
+            "name": "add_review_comment",
+            "description": "Adds a comment on a line (or range) of a changed file to the user's pending review; it's published when the review is submitted. The user confirms it in the app first. Only lines inside the PR's diff can be commented on.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Repo-relative path of a file the PR changes." },
+                    "line": { "type": "integer", "description": "The (last) line to comment on." },
+                    "start_line": { "type": "integer", "description": "First line, for a multi-line comment." },
+                    "side": { "type": "string", "enum": ["new", "old"], "description": "new = the PR's version (default), old = before the PR." },
+                    "body": { "type": "string", "description": "The comment (Markdown)." }
+                },
+                "required": ["path", "line", "body"],
+                "additionalProperties": false
+            },
+            "annotations": write
+        },
+        {
+            "name": "reply_to_thread",
+            "description": "Replies to a review thread (in the user's pending review). The user confirms it in the app first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "thread_id": { "type": "string" }, "body": { "type": "string" } },
+                "required": ["thread_id", "body"],
+                "additionalProperties": false
+            },
+            "annotations": write
+        },
+        {
+            "name": "resolve_thread",
+            "description": "Resolves (or unresolves) a review thread. The user confirms it in the app first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "thread_id": { "type": "string" }, "resolved": { "type": "boolean", "description": "Default true." } },
+                "required": ["thread_id"],
+                "additionalProperties": false
+            },
+            "annotations": write
+        },
+        {
+            "name": "add_pr_comment",
+            "description": "Posts a general comment on the PR's conversation right away (not part of the review). The user confirms it in the app first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "body": { "type": "string" } },
+                "required": ["body"],
+                "additionalProperties": false
+            },
+            "annotations": write
+        },
+        {
+            "name": "submit_review",
+            "description": "Submits the user's review: approve, request changes (GitHub has no 'reject'; use this), or comment, with an optional summary. Publishes the pending comments too. The user confirms it in the app first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "event": { "type": "string", "enum": ["approve", "request_changes", "comment"] },
+                    "body": { "type": "string", "description": "Review summary (Markdown). Needed to request changes when there are no pending comments." }
+                },
+                "required": ["event"],
+                "additionalProperties": false
+            },
+            "annotations": write
+        },
+        {
             "name": "get_file_diff",
             "description": "The PR's unified diff for one file (against the merge-base, like GitHub shows it). Defaults to the file the user has open.",
             "inputSchema": {
@@ -301,6 +411,31 @@ fn call_tool(name: &str, args: &Value, token: &str) -> Result<String, String> {
                 .map_err(|e| e.to_string())?;
             let diff = String::from_utf8_lossy(&out.stdout).into_owned();
             Ok(if diff.trim().is_empty() { format!("{path} has no changes in this PR.") } else { diff })
+        }
+        "get_review_threads" => run_action(token, ReviewAction::Threads),
+        "add_review_comment" => {
+            let path = safe_path(args["path"].as_str().unwrap_or(""))?;
+            let line = args["line"].as_u64().ok_or("line is required.")?;
+            let start_line = args["start_line"].as_u64().filter(|s| *s < line);
+            let side = if args["side"].as_str() == Some("old") { "LEFT" } else { "RIGHT" }.to_string();
+            let body = text_arg(args, "body")?;
+            run_action(token, ReviewAction::Comment { path, side, line, start_line, body })
+        }
+        "reply_to_thread" => run_action(token, ReviewAction::Reply { thread_id: text_arg(args, "thread_id")?, body: text_arg(args, "body")? }),
+        "resolve_thread" => run_action(
+            token,
+            ReviewAction::Resolve { thread_id: text_arg(args, "thread_id")?, resolved: args["resolved"].as_bool().unwrap_or(true) },
+        ),
+        "add_pr_comment" => run_action(token, ReviewAction::PrComment { body: text_arg(args, "body")? }),
+        "submit_review" => {
+            let event = match args["event"].as_str().unwrap_or("") {
+                "approve" => "APPROVE",
+                "request_changes" | "reject" => "REQUEST_CHANGES",
+                "comment" => "COMMENT",
+                other => return Err(format!("event must be approve, request_changes or comment, not {other:?}")),
+            };
+            let body = args["body"].as_str().unwrap_or("").trim().to_string();
+            run_action(token, ReviewAction::Submit { event, body })
         }
         "git_log" | "git_blame" | "git_show" => {
             let r = review();
@@ -357,6 +492,11 @@ fn call_tool(name: &str, args: &Value, token: &str) -> Result<String, String> {
         }
         other => Err(format!("Unknown tool: {other}")),
     }
+}
+
+/// A required, non-empty string argument.
+fn text_arg(args: &Value, name: &str) -> Result<String, String> {
+    args[name].as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from).ok_or_else(|| format!("{name} is required."))
 }
 
 /// A repo-relative path an agent passed: no options, no absolute paths, no `..`.

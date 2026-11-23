@@ -66,7 +66,9 @@ fn instructions(pr_label: &str, merge_base: &str) -> String {
          The user is reviewing this PR, not editing it: you have read-only access (reading and searching files, and the review-tool tools); you can't run commands or change files. \
          When the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\"), call the review-tool get_selection tool first \
          (or read the JSON file in $REVIEW_TOOL_SELECTION_FILE if you have no MCP tools). \
-         Use get_pr for the PR description and changed files, get_file_diff to see what changed in a file, and git_log, git_blame and git_show for history."
+         Use get_pr for the PR description and changed files, get_file_diff to see what changed in a file, and git_log, git_blame and git_show for history. \
+         When the user asks you to comment, reply, resolve a thread, or approve / request changes on / submit the review, use the review-tool tools for it \
+         (get_review_threads for thread ids); the app shows each action to the user and only does it if they confirm, so call the tool rather than asking in chat."
     )
 }
 

@@ -143,15 +143,31 @@ The panel is a full terminal: **⌘C** / **⌘V** copy and paste, **⌘K** clear
 **⌘-click** opens a link. Drag the divider to resize. **Restart** appears if the agent exits.
 While you type in the panel, keys like **⌘L** and **Ctrl+-** go to the agent, not the app.
 
-The agent sees what you're looking at through the app's MCP server, which offers
-`get_selection` (file, side of the diff, lines, selected text), `get_pr` (title, description,
-changed files) and `get_file_diff` (one file's diff against the merge-base). Each window has its
-own, so an agent only sees its own window's PR.
+### Reviewing through the agent
 
-Claude Code is started so the PR can't configure it: the repo's `.mcp.json` and
-`.claude/settings.json` (hooks, permissions) are ignored, and editing tools are disabled, since
-this is review. It also runs as its own session when you start `review-tool` from inside Claude
-Code.
+You can ask the agent to act on the review: *"leave a comment on line 42 saying …"*, *"reply to
+that thread"*, *"resolve the nil-check thread"*, *"approve this PR"*, *"request changes, the error
+handling needs tests"*. Each action pops up in the PR's window showing exactly what will be posted,
+and happens only if you click to confirm; **Don't** tells the agent you declined. (GitHub has no
+"reject": that's **Request changes**.) Comments and replies go into your pending review, like the
+ones you write yourself.
+
+### What the agent can see and do
+
+The app gives the agent an MCP server, one per window, so an agent only sees its own window's PR:
+
+| Tools | What for |
+|---|---|
+| `get_selection`, `get_pr`, `get_file_diff` | What you're looking at, the PR's description and files, one file's diff |
+| `git_log`, `git_blame`, `git_show` | History, read-only |
+| `get_review_threads` | The review threads, with the ids the actions below need |
+| `add_review_comment`, `reply_to_thread`, `resolve_thread`, `add_pr_comment`, `submit_review` | Acting on the review; each one is confirmed by you in the app |
+
+Claude Code in the panel is **read-only**: it can read and search the checkout and use these tools,
+but it has no shell, no editing tools and no web access, so it can't change files or send code
+anywhere. The PR can't configure it either: the repo's `.mcp.json` and `.claude/settings.json`
+(hooks, permissions) are ignored. It also runs as its own session when you start `review-tool`
+from inside Claude Code.
 
 ### Using another agent
 
@@ -180,8 +196,9 @@ codex -c "mcp_servers.review_tool.command=\"$REVIEW_TOOL_MCP_STDIO\""
 claude --model sonnet --mcp-config "$REVIEW_TOOL_MCP_CONFIG" --strict-mcp-config --setting-sources user --append-system-prompt "$REVIEW_TOOL_INSTRUCTIONS"
 ```
 
-A custom command runs with that agent's usual permissions and project settings; the protections
-above apply to the built-in Claude Code setup.
+A custom command runs with that agent's usual permissions and project settings: the read-only
+setup above applies to the built-in Claude Code. Review actions through the MCP tools still need
+your confirmation in the app, whatever the agent.
 
 ## Settings
 

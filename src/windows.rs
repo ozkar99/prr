@@ -164,3 +164,20 @@ pub fn describe(cx: &App) -> Vec<String> {
         })
         .collect()
 }
+
+/// Dev driver: queue a dry-run agent action in the first PR window; returns a
+/// receiver for the outcome. Confirming it never reaches GitHub.
+#[cfg(debug_assertions)]
+pub fn demo_agent_action(action: crate::backend::mcp::ReviewAction, cx: &mut App) -> Option<std::sync::mpsc::Receiver<Result<String, String>>> {
+    let (handle, pr) = cx.global::<Windows>().0.iter().find_map(|(h, v)| Some((*h, v.upgrade()?.read(cx).pr_view()?)))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    handle
+        .update(cx, |_, window, cx| {
+            pr.update(cx, |pr, cx| {
+                pr.dry_run_actions = true;
+                pr.on_agent_action(crate::backend::mcp::ActionRequest { action, reply: tx }, window, cx);
+            })
+        })
+        .ok()?;
+    Some(rx)
+}

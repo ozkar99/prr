@@ -173,6 +173,13 @@ pub struct PrView {
     hovered_token: Option<TokenHit>,
     /// This window's MCP session: its agent sees only this PR and selection.
     mcp: Result<mcp::Session, String>,
+    /// The agent's requests to act on GitHub, waiting for the user's confirmation (first is shown).
+    agent_actions: std::collections::VecDeque<mcp::ActionRequest>,
+    /// The confirmed action is running.
+    agent_action_busy: bool,
+    /// Dev driver only: confirmed actions don't reach GitHub.
+    #[cfg(debug_assertions)]
+    pub dry_run_actions: bool,
 }
 
 impl EventEmitter<PrViewEvent> for PrView {}
@@ -230,6 +237,10 @@ impl PrView {
             last_selection: None,
             hovered_token: None,
             mcp: mcp::new_session(),
+            agent_actions: Default::default(),
+            agent_action_busy: false,
+            #[cfg(debug_assertions)]
+            dry_run_actions: false,
         };
         // The agent sees the PR and the selection through the app's MCP tools.
         let pr = &view.pr;
@@ -251,6 +262,19 @@ impl PrView {
             session.set_review(review);
         }
         view.start_language_servers(cx);
+        // The agent's review actions (comment, submit, …) arrive here.
+        if let Ok(session) = &view.mcp {
+            let mut rx = session.actions();
+            cx.spawn_in(window, async move |this, cx| {
+                use futures::StreamExt;
+                while let Some(request) = rx.next().await {
+                    if this.update_in(cx, |this, window, cx| this.on_agent_action(request, window, cx)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         // So the PR's shortcuts (⌘J, ⌘L, F12, …) work before anything is clicked.
         window.focus(&view.focus, cx);
         if let Some(ix) = first {
@@ -791,8 +815,243 @@ impl PrView {
         )
     }
 
+    // ---- The agent acting on the review (always confirmed by the user) ----
+
+    pub fn on_agent_action(&mut self, request: mcp::ActionRequest, window: &mut Window, cx: &mut Context<Self>) {
+        if let mcp::ReviewAction::Threads = request.action {
+            let _ = request.reply.send(Ok(self.threads_json(cx)));
+            return;
+        }
+        // Check what we can before asking: unknown files/threads, lines outside the diff.
+        if let Err(e) = self.check_action(&request.action, cx) {
+            let _ = request.reply.send(Err(e));
+            return;
+        }
+        self.agent_actions.push_back(request);
+        // Bring this PR's window forward so the user sees the request.
+        cx.activate(true);
+        window.activate_window();
+        cx.notify();
+    }
+
+    fn threads_json(&self, cx: &App) -> String {
+        let Some(state) = &self.review.read(cx).state else { return "The review threads are still loading.".into() };
+        let threads: Vec<Value> = state
+            .threads
+            .iter()
+            .map(|t| {
+                json!({
+                    "id": t.id,
+                    "path": t.path,
+                    "side": if t.side == "LEFT" { "old" } else { "new" },
+                    "line": t.line,
+                    "start_line": t.start_line,
+                    "resolved": t.is_resolved,
+                    "outdated": t.is_outdated,
+                    "comments": t.comments.iter().map(|c| json!({ "author": c.author, "body": c.body, "pending": c.pending })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        serde_json::to_string_pretty(&json!({ "viewer": state.viewer, "threads": threads })).unwrap_or_default()
+    }
+
+    fn check_action(&self, action: &mcp::ReviewAction, cx: &App) -> Result<(), String> {
+        let state = self.review.read(cx).state.clone().ok_or("The review is still loading; try again in a moment.")?;
+        match action {
+            mcp::ReviewAction::Comment { path, side, line, start_line, .. } => {
+                let file = self.pr.files.iter().find(|f| &f.path == path).ok_or_else(|| format!("{path} isn't changed in this PR."))?;
+                if let Some(c) = &file.commentable {
+                    let ranges = if side == "LEFT" { &c.left } else { &c.right };
+                    let start = start_line.unwrap_or(*line);
+                    if !ranges.iter().any(|&(a, b)| start >= a && *line <= b) {
+                        return Err(format!(
+                            "Line(s) {}{line} of {path} ({} side) aren't inside the diff, so GitHub won't take a comment there. Commentable ranges: {:?}",
+                            start_line.map(|s| format!("{s}-")).unwrap_or_default(),
+                            if side == "LEFT" { "old" } else { "new" },
+                            ranges
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            mcp::ReviewAction::Reply { thread_id, .. } | mcp::ReviewAction::Resolve { thread_id, .. } => {
+                state.threads.iter().any(|t| &t.id == thread_id).then_some(()).ok_or_else(|| format!("No thread with id {thread_id}; see get_review_threads."))
+            }
+            mcp::ReviewAction::Submit { event, body } => {
+                if *event != "COMMENT" && state.viewer == self.pr.author {
+                    return Err("You can't approve or request changes on your own pull request.".into());
+                }
+                if *event == "REQUEST_CHANGES" && body.is_empty() && self.review.read(cx).pending_count() == 0 {
+                    return Err("Requesting changes needs a summary (body) or pending comments.".into());
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The user answered the request on top of the queue.
+    fn answer_agent_action(&mut self, confirmed: bool, cx: &mut Context<Self>) {
+        if self.agent_action_busy {
+            return;
+        }
+        let Some(request) = self.agent_actions.pop_front() else { return };
+        if !confirmed {
+            let _ = request.reply.send(Err("The user declined this in the app.".into()));
+            cx.notify();
+            return;
+        }
+        #[cfg(debug_assertions)]
+        if self.dry_run_actions {
+            let _ = request.reply.send(Ok("Dry run: confirmed, not sent to GitHub.".into()));
+            cx.notify();
+            return;
+        }
+        self.agent_action_busy = true;
+        let action = request.action.clone();
+        let task = self.review.update(cx, |r, cx| match action.clone() {
+            mcp::ReviewAction::Comment { path, side, line, start_line, body } => r.add_thread(path, side, line, start_line, body, cx),
+            mcp::ReviewAction::Reply { thread_id, body } => r.reply(thread_id, body, cx),
+            mcp::ReviewAction::Resolve { thread_id, resolved } => r.set_resolved(thread_id, resolved, cx),
+            mcp::ReviewAction::PrComment { body } => r.add_pr_comment(body, cx),
+            mcp::ReviewAction::Submit { event, body } => r.submit(event, body, cx),
+            mcp::ReviewAction::Threads => Task::ready(Ok(())),
+        });
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.agent_action_busy = false;
+                let outcome = result.map(|()| match &action {
+                    mcp::ReviewAction::Comment { path, line, .. } => format!("Added to the pending review: comment on {path}:{line}. It's published when the review is submitted."),
+                    mcp::ReviewAction::Reply { .. } => "Reply added to the pending review.".into(),
+                    mcp::ReviewAction::Resolve { resolved, .. } => if *resolved { "Thread resolved." } else { "Thread unresolved." }.into(),
+                    mcp::ReviewAction::PrComment { .. } => "Comment posted on the PR.".into(),
+                    mcp::ReviewAction::Submit { event, .. } => format!("Review submitted ({}).", match *event {
+                        "APPROVE" => "approved",
+                        "REQUEST_CHANGES" => "changes requested",
+                        _ => "comment",
+                    }),
+                    mcp::ReviewAction::Threads => String::new(),
+                });
+                // Show where the new comment went.
+                if let (Ok(_), mcp::ReviewAction::Comment { path, side, line, .. }) = (&outcome, &action)
+                    && let Some(ix) = this.pr.files.iter().position(|f| &f.path == path)
+                {
+                    this.view = MainView::Code;
+                    let top = (*line as usize).saturating_sub(5).max(1);
+                    this.show(Shown::File(ix), Some((side_of(side), top)), true, cx);
+                }
+                let _ = request.reply.send(outcome);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The card asking the user to confirm what the agent wants to do.
+    fn render_agent_action(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let request = self.agent_actions.front()?;
+        let agent = self.agent_name.clone();
+        let (title, confirm, primary, detail, body): (String, &str, bool, Option<String>, Option<String>) = match &request.action {
+            mcp::ReviewAction::Comment { path, side, line, start_line, body } => (
+                "add a review comment".into(),
+                "Add comment",
+                true,
+                Some(format!(
+                    "{path}, {}{}{}",
+                    start_line.map(|s| format!("lines {s}–{line}")).unwrap_or_else(|| format!("line {line}")),
+                    if side == "LEFT" { " (old version)" } else { "" },
+                    " · goes into your pending review"
+                )),
+                Some(body.clone()),
+            ),
+            mcp::ReviewAction::Reply { thread_id, body } => {
+                let thread = self.review.read(cx).state.as_ref().and_then(|s| s.threads.iter().find(|t| &t.id == thread_id).cloned());
+                let detail = thread.map(|t| format!("On {}:{} · {}", t.path, t.line.map(|l| l.to_string()).unwrap_or("outdated".into()), t.comments.first().map(|c| format!("{}: {}", c.author, crate::markdown::snippet(&c.body))).unwrap_or_default()));
+                ("reply to a thread".into(), "Reply", true, detail, Some(body.clone()))
+            }
+            mcp::ReviewAction::Resolve { thread_id, resolved } => {
+                let thread = self.review.read(cx).state.as_ref().and_then(|s| s.threads.iter().find(|t| &t.id == thread_id).cloned());
+                let detail = thread.map(|t| format!("{}:{} · {}", t.path, t.line.map(|l| l.to_string()).unwrap_or("outdated".into()), t.comments.first().map(|c| format!("{}: {}", c.author, crate::markdown::snippet(&c.body))).unwrap_or_default()));
+                (if *resolved { "resolve a thread" } else { "unresolve a thread" }.into(), if *resolved { "Resolve" } else { "Unresolve" }, true, detail, None)
+            }
+            mcp::ReviewAction::PrComment { body } => ("post a comment on the PR".into(), "Post comment", true, Some("Posts right away, separate from your review".into()), Some(body.clone())),
+            mcp::ReviewAction::Submit { event, body } => {
+                let pending = self.review.read(cx).pending_count();
+                let (title, confirm) = match *event {
+                    "APPROVE" => ("approve this pull request", "Approve"),
+                    "REQUEST_CHANGES" => ("request changes on this pull request", "Request changes"),
+                    _ => ("submit your review as a comment", "Submit review"),
+                };
+                let detail = Some(if pending > 0 { format!("Also publishes {pending} pending comment{}", if pending == 1 { "" } else { "s" }) } else { "No pending comments".into() });
+                (title.into(), confirm, true, detail, (!body.is_empty()).then(|| body.clone()))
+            }
+            mcp::ReviewAction::Threads => return None,
+        };
+        let queued = self.agent_actions.len();
+        let busy = self.agent_action_busy;
+        Some(deferred(
+            div().absolute().top(px(46.)).left_0().right_0().flex().justify_center().child(
+                div()
+                    .id("agent-action")
+                    .occlude()
+                    .w(px(560.))
+                    .p(px(14.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .bg(hsla(theme::PANEL))
+                    .border_1()
+                    .border_color(hsla(theme::ACCENT))
+                    .rounded(px(8.))
+                    .shadow_lg()
+                    .text_size(theme::TEXT)
+                    .text_color(hsla(theme::FG))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(6.))
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("✦ {agent} wants to {title}")))
+                            .when(queued > 1, |el| el.child(ui::muted(format!("(1 of {queued})")))),
+                    )
+                    .children(detail.map(|d| ui::muted(d).text_size(theme::TEXT_SMALL)))
+                    .children(body.map(|b| {
+                        div()
+                            .id("agent-action-body")
+                            .max_h(px(260.))
+                            .overflow_y_scroll()
+                            .px(px(10.))
+                            .py(px(8.))
+                            .bg(hsla(theme::BG))
+                            .border_1()
+                            .border_color(hsla(theme::BORDER))
+                            .rounded(px(4.))
+                            .child(crate::review::markdown_body("agent-action-md", &b, cx))
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(8.))
+                            .child(ui::button("agent-action-no", "Don't").when(!busy, |el| el.on_click(cx.listener(|this, _, _, cx| this.answer_agent_action(false, cx)))))
+                            .child(
+                                (if primary { ui::primary_button("agent-action-yes", if busy { "Working…" } else { confirm }) } else { ui::button("agent-action-yes", confirm) })
+                                    .when(busy, |el| el.opacity(0.6))
+                                    .when(!busy, |el| el.on_click(cx.listener(|this, _, _, cx| this.answer_agent_action(true, cx)))),
+                            ),
+                    ),
+            ),
+        )
+        .with_priority(2))
+    }
+
     /// Leaving the PR: stop its servers and clear the agent's context.
     pub fn close(&mut self, cx: &mut App) {
+        for request in self.agent_actions.drain(..) {
+            let _ = request.reply.send(Err("The review window was closed.".into()));
+        }
         if let Some(agent) = self.agent.take() {
             agent.update(cx, |t, _| t.kill());
         }
@@ -1739,6 +1998,7 @@ impl Render for PrView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(hsla(theme::BG))
@@ -1815,6 +2075,7 @@ impl Render for PrView {
                 let peek = self.render_peek(cx);
                 peek
             })
+            .children(self.render_agent_action(cx))
     }
 }
 

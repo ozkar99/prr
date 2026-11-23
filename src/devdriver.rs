@@ -25,6 +25,8 @@ use std::net::TcpListener;
 
 type Request = (Value, oneshot::Sender<Value>);
 
+static AGENT_RESULT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 pub fn start(cx: &mut App, open_pr: impl Fn(String, &mut Window, &mut App) + 'static) {
     let Some(port) = std::env::var("REVIEW_TOOL_DEBUG_PORT").ok().and_then(|p| p.parse::<u16>().ok()) else { return };
     let (tx, mut rx) = mpsc::unbounded::<Request>();
@@ -167,6 +169,26 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App, open_pr: &dyn Fn(String, 
             window.activate_window();
             ok
         }
+        // A dry-run agent request (never sent to GitHub); "agent_result" reads the outcome.
+        "agent_action" => {
+            let body = cmd["body"].as_str().unwrap_or("").to_string();
+            let action = match cmd["kind"].as_str().unwrap_or("approve") {
+                "request_changes" => crate::backend::mcp::ReviewAction::Submit { event: "REQUEST_CHANGES", body },
+                "comment" => crate::backend::mcp::ReviewAction::PrComment { body },
+                _ => crate::backend::mcp::ReviewAction::Submit { event: "APPROVE", body },
+            };
+            // Deferred: this runs inside a window update.
+            cx.defer(move |cx| {
+                if let Some(rx) = crate::windows::demo_agent_action(action, cx) {
+                    std::thread::spawn(move || {
+                        let outcome = rx.recv().unwrap_or(Err("dropped".into()));
+                        *AGENT_RESULT.lock().unwrap() = Some(format!("{outcome:?}"));
+                    });
+                }
+            });
+            ok
+        }
+        "agent_result" => json!({ "result": AGENT_RESULT.lock().unwrap().clone() }),
         "windows" => json!({ "windows": crate::windows::describe(cx), "active": cx.active_window().map(|w| w.window_id().as_u64()) }),
         "info" => {
             let size = window.viewport_size();
