@@ -546,6 +546,8 @@ impl PrView {
 
     /// Starts a server for each language among the PR's files (as the registry describes them).
     fn start_language_servers(&mut self, cx: &mut Context<Self>) {
+        // Pick up languages.toml edits: they apply to PRs opened afterwards.
+        language::reload();
         let registry = language::registry();
         let mut langs: Vec<Arc<dyn Language>> = Vec::new();
         for f in &self.pr.files {
