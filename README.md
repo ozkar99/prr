@@ -134,15 +134,32 @@ the exception: they post immediately.
 ### Asking an agent about the code
 
 **⌘J** (or **✦ Claude Code** in the header) opens a terminal panel at the bottom running a coding
-agent in the PR's checkout: Claude Code by default, using your existing Claude Code login. Select
-some code, then right-click or use the shortcut:
+agent in the PR's checkout: Claude Code by default, using your existing Claude Code login. It
+starts the first time you open the panel and keeps running while the panel is hidden.
+
+To ask about code, select some lines (or just click one), then use the shortcut or the
+**Agent** items at the top of the code's right-click menu:
 
 | Command | Shortcut | What happens |
 |---|---|---|
 | **Agent: About this code** | ⌘L | The panel opens with `About <file> lines A-B: ` typed in; you finish the question. |
 | **Agent: Explain this code** | ⌘⇧L | Sends `Explain <file> lines A-B.` right away. |
 
-Drag the divider to resize; the session keeps running while the panel is hidden.
+Lines on the left side of a diff are marked as the old version. If the agent is just starting, the
+text is typed once its prompt is ready. It's never typed into a question the agent is asking (like
+Claude Code's "trust this folder?" on a new checkout): answer that yourself first.
+
+In the panel:
+
+- It's a full terminal: **⌘C** / **⌘V** copy and paste, **⌘K** clears, scroll for history,
+  **⌘-click** opens a link.
+- Drag the divider to resize; the height is remembered.
+- **Restart** appears if the agent exits.
+- **⌘J** hides it again; **Ctrl+-** and **⌘L** go to the agent while you're typing there, not to the app.
+- The terminal font size is in **Settings**.
+
+If you start `review-tool` from inside a Claude Code session, the panel's agent still starts as a
+separate session of its own.
 
 The agent knows what you're looking at through the app's MCP server, which has three tools:
 `get_selection` (file, side of the diff, lines, selected text), `get_pr` (title, description,
@@ -154,7 +171,8 @@ is review, not editing.
 
 #### Using another agent (Codex, Gemini CLI, …)
 
-Open **Settings** (**⌘,**, the **Settings** link on the home screen, or **⚙** in a PR) and enter
+Open **Settings** (**⌘,**, **Review Tool → Settings…** in the menu bar, the **Settings** link on
+the home screen, or **⚙** in a PR) and enter
 the command under **Agent command**. It runs in your login shell, in the PR checkout; clear it to go
 back to Claude Code. It applies the next time the agent starts (**Restart** in the panel, or reopen
 the PR). A command in `~/.review-tool-agent-command`, as older versions used, still works when the
@@ -187,7 +205,7 @@ uses; the protections above apply only to the built-in Claude Code default.
 
 ### Settings
 
-**⌘,** opens Settings: the agent command, the editor and terminal font sizes (applied right
+**⌘,** (or **Review Tool → Settings…** in the menu bar) opens Settings: the agent command, the editor and terminal font sizes (applied right
 away), and the agent panel's height is remembered. They're saved in
 `~/Library/Application Support/review-tool/settings.json`.
 
