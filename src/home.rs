@@ -81,7 +81,7 @@ impl Home {
         self.load_usage(cx);
     }
 
-    // ---- Setup check (git + a GitHub token are required; the queue waits for them) ----
+    // ---- Setup check (git + a logged-in gh are required; the queue waits for them) ----
 
     fn check_tools(&mut self, cx: &mut Context<Self>) {
         self.checking = true;

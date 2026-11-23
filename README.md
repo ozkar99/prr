@@ -25,33 +25,19 @@ Xcode Command Line Tools (`xcode-select --install`) for git and clangd.
 brew tap ozkar99/prr https://github.com/ozkar99/prr
 brew trust --cask ozkar99/prr/prr   # Homebrew asks before using a third-party tap
 brew install --cask prr
+gh auth login                       # once: the app uses gh's GitHub login
 ```
 
 This puts **prr** in Applications and the `prr` command on your `PATH`, and
-installs Node.js if you don't have it.
+installs the GitHub CLI (`gh`) and Node.js if you don't have them.
 
 ### GitHub access
 
-prr has no login of its own. It uses the first GitHub token it finds, skipping any that GitHub
-rejects:
-
-1. one you saved in **Settings → GitHub token** (kept in your macOS Keychain); there's none unless
-   you add it,
-2. git's saved credentials for `https://github.com`, such as the token macOS Keychain or Git
-   Credential Manager stored the last time you pushed over HTTPS. If your organization uses SAML
-   single sign-on, this token is already authorized for it,
-3. the `GH_TOKEN` or `GITHUB_TOKEN` environment variable (only when you start prr from a terminal),
-4. the [GitHub CLI](https://cli.github.com)'s login, if `gh` is installed.
-
-If none of these work for you, create a
-[personal access token](https://github.com/settings/personal-access-tokens) with read access to the
-repositories you review (and write access to pull requests, to post reviews), and paste it in
-Settings. If your organization uses SAML single sign-on, authorize the token for it. The home screen
-shows which token is in use and the account it belongs to. prr's own clones use the same token over
-HTTPS, so SSH keys aren't needed.
-
-Update with `brew upgrade --cask prr`. Uninstall with `brew uninstall --cask prr`
-(add `--zap` to also remove its checkouts and settings).
+prr has no login of its own: it uses the [GitHub CLI](https://cli.github.com)'s. If gh is logged
+in to more than one github.com account (`gh auth login` again adds another, e.g. a work account
+next to a personal one), pick the one prr uses in **Settings → GitHub account**. By default it's
+gh's active account. prr's own clones use the same account over HTTPS, so SSH keys aren't needed,
+and your gh and git settings aren't changed.
 
 ### Language servers
 
@@ -300,7 +286,7 @@ The sidebar's width, the diff's split and the agent panel's height are remembere
 
 | Problem | Fix |
 |---|---|
-| "Couldn't load pull requests" or "GitHub rejected the token" | Settings shows which token is in use; replace it with a working one (see [GitHub access](#github-access)). |
+| "Couldn't load pull requests" | Check `gh auth status`; run `gh auth refresh -h github.com` if the token is invalid. If gh has several accounts, check which one Settings → GitHub account uses. |
 | A server chip says **not installed** | Install it (hover the chip for the command), then reopen the PR. |
 | A server chip says **failed** | Hover it to see the error. |
 | C++ types are wrong or headers don't resolve | clangd needs `compile_commands.json` (below). |

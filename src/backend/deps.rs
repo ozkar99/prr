@@ -1,5 +1,5 @@
 //! Which external tools are available on this machine, for the setup check on
-//! the home screen. git and a GitHub token are required; the rest unlock
+//! the home screen. git and a logged-in gh are required; the rest unlock
 //! language features or the agent panel.
 use crate::backend::auth;
 use crate::backend::exec::which;
@@ -66,26 +66,27 @@ pub async fn check() -> Vec<ToolStatus> {
     tools
 }
 
-/// Whether there's a GitHub token, where it came from, and that GitHub takes it.
+/// Whether gh is installed and logged in, and that GitHub takes its token.
 async fn github_status() -> ToolStatus {
-    let mut status = ToolStatus { name: "GitHub".into(), purpose: String::new(), required: true, ok: false, problem: None, fix: Some(auth::HOW_TO_FIX.into()) };
-    let token = match auth::token().await {
-        Ok(t) => t,
-        Err(_) => {
-            status.purpose = "access to pull requests".into();
-            status.problem = Some("no token found (Settings, git credentials for github.com, $GH_TOKEN, or gh)".into());
-            return status;
-        }
-    };
+    let mut status = ToolStatus { name: "gh".into(), purpose: "GitHub access (prr uses its login)".into(), required: true, ok: false, problem: None, fix: None };
+    if which("gh").is_none() {
+        status.problem = Some("not installed".into());
+        status.fix = Some(auth::HOW_TO_FIX.into());
+        return status;
+    }
+    if let Err(e) = auth::token().await {
+        status.problem = Some("not logged in".into());
+        status.fix = Some(if e.contains("picked in Settings") { e } else { "gh auth login".into() });
+        return status;
+    }
     match crate::backend::github::viewer().await {
         Ok(login) => {
             status.ok = true;
-            status.fix = None;
-            status.purpose = format!("signed in as @{login}, using {}", token.source.describe());
+            status.purpose = format!("GitHub access, signed in as @{login}");
         }
         Err(e) => {
-            status.purpose = format!("using {}", token.source.describe());
             status.problem = Some(e);
+            status.fix = Some("gh auth refresh -h github.com".into());
         }
     }
     status
