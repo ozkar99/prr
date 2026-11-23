@@ -68,3 +68,8 @@ pub fn data_dir() -> PathBuf {
 pub fn worktrees_dir() -> PathBuf {
     data_dir().join("worktrees")
 }
+
+/// Worktrees made from the user's own clones (copy-on-write), one per open PR window.
+pub fn clone_worktrees_dir() -> PathBuf {
+    data_dir().join("clone-worktrees")
+}

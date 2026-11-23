@@ -39,6 +39,11 @@ pub struct Home {
 impl EventEmitter<HomeEvent> for Home {}
 
 impl Home {
+    /// Whether it's busy opening a PR.
+    pub fn is_busy(&self) -> bool {
+        self.busy.is_some()
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Paste a PR URL or owner/repo#123"));
         let subscription = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
@@ -144,7 +149,7 @@ impl Home {
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.input.read(cx).value().to_string();
         match parse_pr_ref(&value) {
-            Some(r) => self.open(r.owner, r.repo, r.number, None, window, cx),
+            Some(r) => self.open(r.owner, r.repo, r.number, None, false, window, cx),
             None => {
                 self.error = Some("Enter a PR URL or owner/repo#number".into());
                 cx.notify();
@@ -152,7 +157,7 @@ impl Home {
         }
     }
 
-    pub fn open(&mut self, owner: String, repo: String, number: u64, local_repo: Option<String>, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open(&mut self, owner: String, repo: String, number: u64, local_repo: Option<String>, local_worktree: bool, _window: &mut Window, cx: &mut Context<Self>) {
         self.pending_switch = None;
         self.notice = None;
         self.error = None;
@@ -161,7 +166,7 @@ impl Home {
         let fut = backend::task(async move { github::get_pr(&owner, &repo, number).await });
         cx.spawn(async move |this, cx| match fut.await {
             Ok(pr) => {
-                this.update(cx, |this, cx| this.checkout(pr, local_repo, false, cx)).ok();
+                this.update(cx, |this, cx| this.checkout(pr, local_repo, local_worktree, false, cx)).ok();
             }
             Err(e) => {
                 this.update(cx, |this, cx| {
@@ -175,7 +180,7 @@ impl Home {
         .detach();
     }
 
-    fn checkout(&mut self, pr: PRDetails, local_repo: Option<String>, allow_switch: bool, cx: &mut Context<Self>) {
+    fn checkout(&mut self, pr: PRDetails, local_repo: Option<String>, local_worktree: bool, allow_switch: bool, cx: &mut Context<Self>) {
         self.pending_switch = None;
         self.error = None;
         self.busy = Some(format!("Loading {}/{}#{}…", pr.owner, pr.repo, pr.number));
@@ -185,7 +190,7 @@ impl Home {
         let (progress_tx, mut progress_rx) = futures::channel::mpsc::unbounded::<String>();
         let pr_for_task = pr.clone();
         let fut = backend::task(async move {
-            git::checkout(&pr_for_task, local_repo.as_deref(), allow_switch, move |msg| {
+            git::checkout(&pr_for_task, local_repo.as_deref(), local_worktree, allow_switch, move |msg| {
                 let _ = progress_tx.unbounded_send(msg);
             })
             .await
@@ -366,15 +371,15 @@ impl Home {
                         .items_center()
                         .when(!p.dirty, |el| {
                             el.child(ui::primary_button("switch-yes", "Switch my clone").on_click(cx.listener(move |this, _, _, cx| {
-                                this.checkout(p1.pr.clone(), Some(p1.path.clone()), true, cx)
+                                this.checkout(p1.pr.clone(), Some(p1.path.clone()), false, true, cx)
                             })))
                         })
                         .child(ui::button("switch-separate", "Use a separate checkout").on_click(cx.listener(move |this, _, _, cx| {
-                            this.checkout(p2.pr.clone(), None, false, cx)
+                            this.checkout(p2.pr.clone(), Some(p2.path.clone()), true, false, cx)
                         })))
                         .when(p.dirty, |el| {
                             el.child(ui::button("switch-recheck", "Check again").on_click(cx.listener(move |this, _, _, cx| {
-                                this.checkout(p3.pr.clone(), Some(p3.path.clone()), false, cx)
+                                this.checkout(p3.pr.clone(), Some(p3.path.clone()), false, false, cx)
                             })))
                         })
                         .child(ui::link("switch-cancel", "Cancel").on_click(cx.listener(|this, _, _, cx| {
@@ -432,7 +437,7 @@ impl Home {
                             .when(!busy, |el| el.cursor_pointer().hover(|s| s.bg(hsla(theme::HOVER))))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if this.busy.is_none() {
-                                    this.open(owner.clone(), repo.clone(), number, None, window, cx);
+                                    this.open(owner.clone(), repo.clone(), number, None, false, window, cx);
                                 }
                             }))
                             .child(

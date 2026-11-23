@@ -171,6 +171,8 @@ pub struct PrView {
     last_selection: Option<Value>,
     /// The symbol under the pointer (for the right-click menu).
     hovered_token: Option<TokenHit>,
+    /// This window's MCP session: its agent sees only this PR and selection.
+    mcp: Result<mcp::Session, String>,
 }
 
 impl EventEmitter<PrViewEvent> for PrView {}
@@ -227,10 +229,11 @@ impl PrView {
             splitter_drag: None,
             last_selection: None,
             hovered_token: None,
+            mcp: mcp::new_session(),
         };
         // The agent sees the PR and the selection through the app's MCP tools.
         let pr = &view.pr;
-        mcp::set_review(json!({
+        let review = json!({
             "root": view.checkout.root,
             "mergeBase": view.checkout.merge_base,
             "pr": {
@@ -243,7 +246,10 @@ impl PrView {
                 "description": pr.body,
                 "files": pr.files.iter().map(|f| json!({ "path": f.path, "status": f.status, "additions": f.additions, "deletions": f.deletions })).collect::<Vec<_>>(),
             }
-        }));
+        });
+        if let Ok(session) = &view.mcp {
+            session.set_review(review);
+        }
         view.start_language_servers(cx);
         // So the PR's shortcuts (⌘J, ⌘L, F12, …) work before anything is clicked.
         window.focus(&view.focus, cx);
@@ -561,10 +567,11 @@ impl PrView {
         self.last_selection = Some(value.clone());
         self.selection_seq += 1;
         let seq = self.selection_seq;
+        let Ok(session) = self.mcp.clone() else { return };
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(120)).await;
             if this.read_with(cx, |this, _| this.selection_seq == seq).unwrap_or(false) {
-                mcp::set_selection(value);
+                session.set_selection(value);
             }
         })
         .detach();
@@ -595,7 +602,12 @@ impl PrView {
         }
         let pr = &self.pr;
         let label = format!("{}/{}#{} (\"{}\")", pr.owner, pr.repo, pr.number, pr.title);
-        let launch = match crate::backend::agent::launch(&label, &self.checkout.merge_base, &self.checkout.root) {
+        let launch = match self
+            .mcp
+            .as_ref()
+            .map_err(|e| format!("Couldn't start the agent's context server: {e}"))
+            .and_then(|session| crate::backend::agent::launch(&label, &self.checkout.merge_base, &self.checkout.root, session))
+        {
             Ok(l) => l,
             Err(e) => {
                 self.agent_status = AgentStatus::Failed(e);
@@ -785,7 +797,9 @@ impl PrView {
             agent.update(cx, |t, _| t.kill());
         }
         self.selection_seq += 1;
-        mcp::set_review(Value::Null);
+        if let Ok(session) = &self.mcp {
+            session.end();
+        }
         self.stop_language_servers();
     }
 
@@ -995,6 +1009,7 @@ impl PrView {
             )
             .child(ui::spacer())
             .when(self.checkout.local.is_some(), |el| el.child(ui::chip("your clone", theme::FG)))
+            .when(self.checkout.worktree_of.is_some(), |el| el.child(ui::chip("copy of your clone", theme::FG)))
             .children(lsp::LANGUAGES.iter().filter_map(|lang| {
                 let (text, color, tip) = match self.lsp.get(lang)? {
                     LspState::Starting => ("starting".to_string(), theme::WARN, None),
@@ -1562,7 +1577,7 @@ impl PrView {
                         div()
                             .flex()
                             .h(px(280.))
-                            .child(div().id("peek-preview").flex_1().min_w_0().overflow_hidden().pt(px(4.)).child(preview))
+                            .child(div().id("peek-preview").flex_1().min_w_0().overflow_hidden().pt(px(4.)).cursor_text().child(preview))
                             .child(
                                 div()
                                     .id("peek-list")
@@ -1586,7 +1601,7 @@ impl PrView {
         let at = point(hover.point.x, hover.point.y + px(10.));
         let mut parts = div().flex().flex_col();
         for (i, part) in hover_parts(&hover.markdown).into_iter().enumerate() {
-            let section = div().px(px(8.)).py(px(4.)).when(i > 0, |el| el.border_t_1().border_color(hsla(0x454545)));
+            let section = div().px(px(8.)).py(px(4.)).cursor_text().when(i > 0, |el| el.border_t_1().border_color(hsla(0x454545)));
             parts = parts.child(match part {
                 HoverPart::Code(language, code) => {
                     let language = match language.as_str() {

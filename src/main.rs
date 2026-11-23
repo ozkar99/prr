@@ -17,6 +17,7 @@ mod review;
 mod settings;
 mod terminal;
 mod theme;
+mod windows;
 mod ui;
 
 use gpui::*;
@@ -58,7 +59,8 @@ fn set_up_menus(cx: &mut App) {
         KeyBinding::new("cmd-h", Hide, None),
         KeyBinding::new("alt-cmd-h", HideOthers, None),
     ]);
-    cx.set_menus([Menu::new("Review Tool").items([
+    cx.set_menus([
+        Menu::new("Review Tool").items([
         MenuItem::action("Settings…", settings::OpenSettings),
         MenuItem::separator(),
         MenuItem::action("Hide Review Tool", Hide),
@@ -66,7 +68,17 @@ fn set_up_menus(cx: &mut App) {
         MenuItem::action("Show All", ShowAll),
         MenuItem::separator(),
         MenuItem::action("Quit Review Tool", Quit),
-    ])]);
+        ]),
+        Menu::new("File").items([
+            MenuItem::action("New Window", windows::NewWindow),
+            MenuItem::separator(),
+            MenuItem::action("Close Window", windows::CloseWindow),
+        ]),
+        Menu::new("Window").items([
+            MenuItem::action("Minimize", windows::MinimizeWindow),
+            MenuItem::action("Next Window", windows::NextWindow),
+        ]),
+    ]);
 }
 
 fn main() {
@@ -101,40 +113,13 @@ fn main() {
         settings::init(cx);
         set_up_menus(cx);
 
-        let bounds = Bounds::centered(None, size(px(1500.), px(950.)), cx);
-        let app_view: std::rc::Rc<std::cell::RefCell<Option<WeakEntity<app::AppView>>>> = Default::default();
-        let app_view_slot = app_view.clone();
-        let window = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Review Tool".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(16.), px(13.))),
-                }),
-                window_background: WindowBackgroundAppearance::Opaque,
-                ..Default::default()
-            },
-            |window, cx| {
-                let view = cx.new(|cx| app::AppView::new(window, cx));
-                *app_view_slot.borrow_mut() = Some(view.downgrade());
-                if let Some(pr) = launch.clone() {
-                    view.update(cx, |view, cx| view.open(pr, window, cx));
-                }
-                #[cfg(debug_assertions)]
-                {
-                    let weak = view.downgrade();
-                    devdriver::start(cx, move |url, window, cx| {
-                        if let Some(pr) = backend::types::parse_pr_ref(&url) {
-                            weak.update(cx, |view, cx| view.open(pr, window, cx)).ok();
-                        }
-                    });
-                }
-                cx.new(|cx| Root::new(view, window, cx))
-            },
-        )
-        .expect("failed to open the window");
-        cx.activate(true);
+        windows::init(cx);
+        windows::open(launch.clone(), cx);
+        #[cfg(debug_assertions)]
+        devdriver::start(cx, |url, _, cx| {
+            // Routed like a launch; deferred because the driver runs inside a window update.
+            cx.defer(move |cx| windows::route(instance::Request { open_pr: Some(url), local_repo: None }, cx));
+        });
 
         // Later launches (another `review-tool …`, or opening the app again) land here.
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<instance::Request>();
@@ -144,19 +129,11 @@ fn main() {
         cx.spawn(async move |cx| {
             use futures::StreamExt;
             while let Some(request) = rx.next().await {
-                let view = app_view.borrow().clone();
-                window
-                    .update(cx, |_, window, cx| {
-                        cx.activate(true);
-                        window.activate_window();
-                        if let (Some(pr), Some(view)) = (request.pr(), view) {
-                            view.update(cx, |view, cx| view.open(pr, window, cx)).ok();
-                        }
-                    })
-                    .ok();
+                cx.update(|cx| windows::route(request, cx));
             }
         })
         .detach();
-        cx.spawn(async move |_| backend::cleanup::on_startup().await).detach();
+        // On the backend runtime: the cleanup uses tokio (files, git).
+        let _ = backend::task(backend::cleanup::on_startup());
     });
 }

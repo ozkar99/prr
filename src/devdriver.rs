@@ -167,6 +167,7 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App, open_pr: &dyn Fn(String, 
             window.activate_window();
             ok
         }
+        "windows" => json!({ "windows": crate::windows::describe(cx), "active": cx.active_window().map(|w| w.window_id().as_u64()) }),
         "info" => {
             let size = window.viewport_size();
             json!({ "width": f32::from(size.width), "height": f32::from(size.height), "scale": window.scale_factor(), "window": window_number(window) })

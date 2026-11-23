@@ -76,7 +76,10 @@ review-tool 123                                      # inside a clone: PR #123 o
 review-tool                                          # inside a clone: the PR for your current branch
 ```
 
-If the app is already open, the PR opens in the existing window.
+Each PR gets its own window, so you can review several at once. If the PR is already open, its
+window comes to the front; a window on the home screen is reused. Each window has its own
+language servers, agent session and back stack, and closing it (**⌘W**) cleans up just that PR.
+**⌘N** opens a new window, **⌘`** switches between them, and the app quits with its last window.
 
 You can also run `review-tool` with no PR (outside a repo) and pick one in the app: from
 **Review requested** / **Your pull requests**, or by pasting a URL or `owner/repo#123`.
@@ -87,8 +90,12 @@ You can also run `review-tool` with no PR (outside a repo) and pick one in the a
   copy, which matters for big monorepos, and your language-server caches are reused. The PR's
   commits are fetched into your clone without adding any branches or refs. If your clone isn't
   already at the PR (e.g. after `gh pr checkout`), the app asks before switching it, and switches
-  it back to your branch when you close the PR. It won't switch a clone with uncommitted changes;
-  you can review in a separate checkout instead.
+  it back to your branch when you close the PR. It won't switch a clone with uncommitted changes.
+- **More PRs from the same clone** (another window already uses it), or a clone with uncommitted
+  changes: the PR gets a `git worktree` of your clone in the app's folder, filled with
+  copy-on-write copies of your checkout (APFS clones). It shares your clone's objects and, on disk,
+  costs only the files that differ, so several PRs of a large monorepo stay cheap. It appears in
+  your clone's `git worktree list` while the window is open and is removed when you close it.
 - **Anywhere else** (or from the app's PR list), the app uses its own copy: one clone per repo,
   shared by its PRs, plus a checkout per PR. The clone is blobless (history without file
   contents), so even a large repo's first PR opens quickly; later PRs only fetch what's new.

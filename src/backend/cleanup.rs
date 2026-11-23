@@ -149,4 +149,5 @@ pub fn remove_electron_leftovers() {
 pub async fn on_startup() {
     remove_electron_leftovers();
     remove_unused_worktrees(None).await;
+    crate::backend::git::remove_stale_clone_worktrees().await;
 }

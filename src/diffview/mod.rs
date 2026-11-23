@@ -1898,6 +1898,8 @@ fn code_line(
     });
     let source = div()
         .id("source")
+        // An I-beam over code, as in an editor.
+        .cursor_text()
         .test_support()
         .map(|this| {
             if code.soft_wrap {

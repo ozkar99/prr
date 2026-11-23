@@ -372,6 +372,7 @@ pub fn markdown_body(id: impl Into<ElementId>, body: &str, cx: &App) -> impl Int
     div()
         .text_size(theme::TEXT)
         .line_height(px(19.5))
+        .cursor_text()
         .child(TextView::markdown(id, body.to_string()).style(markdown_style(cx)).selectable(true))
 }
 
