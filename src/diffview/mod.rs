@@ -200,6 +200,33 @@ type HoverHandler = Rc<dyn Fn(Option<&DiffLinePosition>, &mut Window, &mut App)>
 type TokenHoverHandler = Rc<dyn Fn(Option<&TokenHit>, &mut Window, &mut App)>;
 type TokenClickHandler = Rc<dyn Fn(&TokenHit, &ClickEvent, &mut Window, &mut App)>;
 
+/// Text to highlight in the code (the app's ⌘F search). Added for the review app.
+#[derive(Clone, Debug, Default)]
+pub struct DiffSearch {
+    /// Matched case-insensitively (ASCII), in each line's displayed text.
+    pub query: SharedString,
+    /// Lines searched; matches on the other side aren't highlighted.
+    pub side: Option<DiffSide>,
+    /// The current match: side, 1-based line, byte offset in the displayed line.
+    pub current: Option<(DiffSide, usize, usize)>,
+}
+
+/// Byte ranges of `query` in `text`, case-insensitive (ASCII), not overlapping.
+pub fn find_matches(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let (hay, needle) = (text.to_ascii_lowercase(), query.to_ascii_lowercase());
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(at) = hay[from..].find(&needle) {
+        let start = from + at;
+        out.push(start..start + needle.len());
+        from = start + needle.len().max(1);
+    }
+    out
+}
+
 /// The character under the pointer in a code line (added for LSP hover and
 /// go-to-definition; not in GPUI Kit's diff).
 #[derive(Clone, Debug)]
@@ -250,6 +277,7 @@ pub struct Diff {
     annotations: Rc<Annotations>,
     annotation_content: Option<AnnotationRenderer>,
     decorations: Rc<Decorations>,
+    search: Option<Rc<DiffSearch>>,
     gutter_markers: Rc<GutterMarkers>,
     gutter_marker_content: Option<MarkerRenderer>,
     on_add_annotation: Option<RangeHandler>,
@@ -286,6 +314,7 @@ impl Diff {
             annotations: Rc::default(),
             annotation_content: None,
             decorations: Rc::default(),
+            search: None,
             gutter_markers: Rc::default(),
             gutter_marker_content: None,
             on_add_annotation: None,
@@ -513,6 +542,11 @@ impl Diff {
         self
     }
     /// Reports the line under the pointer, or `None` when the pointer leaves it.
+    /// Highlights search matches (and the current one) in the code.
+    pub fn search(mut self, search: Option<DiffSearch>) -> Self {
+        self.search = search.filter(|s| !s.query.is_empty()).map(Rc::new);
+        self
+    }
     /// Limits the add button to lines this accepts (e.g. lines GitHub can comment on).
     pub fn can_add_annotation<F>(mut self, predicate: F) -> Self
     where
@@ -656,6 +690,7 @@ fn render_diff(
         annotations: props.annotations.clone(),
         annotation_content: props.annotation_content,
         decorations: props.decorations,
+        search: props.search,
         gutter_markers: props.gutter_markers,
         gutter_marker_content: props.gutter_marker_content.filter(|_| marker_lane),
         lane_width,
@@ -910,6 +945,7 @@ struct CodePresentation {
     annotations: Rc<Annotations>,
     annotation_content: Option<AnnotationRenderer>,
     decorations: Rc<Decorations>,
+    search: Option<Rc<DiffSearch>>,
     gutter_markers: Rc<GutterMarkers>,
     /// Set only while the marker lane is shown.
     gutter_marker_content: Option<MarkerRenderer>,
@@ -1662,6 +1698,22 @@ fn line_highlights(
                 },
             )
         }));
+    }
+    // Search matches, the current one stronger (VS Code's find colors).
+    if let Some(search) = &code.search
+        && search.side.is_none_or(|s| s == side)
+    {
+        let number = line.line_number();
+        for range in find_matches(line.display(), &search.query) {
+            let current = search.current == Some((side, number, range.start));
+            highlights.push((
+                range,
+                HighlightStyle {
+                    background_color: Some(gpui::rgba(if current { 0x9e6a03ff } else { 0xea5c0055 }).into()),
+                    ..Default::default()
+                },
+            ));
+        }
     }
     if selected {
         highlights.push((
