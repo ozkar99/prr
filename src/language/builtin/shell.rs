@@ -1,6 +1,6 @@
 //! Shell scripts, with bash-language-server (bundled with the app, runs on Node.js).
+use super::node_server;
 use crate::language::{Language, ServerSpec, file_and_ext};
-use super::{node_server};
 use std::path::Path;
 
 pub struct Shell;
@@ -15,7 +15,10 @@ impl Language for Shell {
     fn matches(&self, path: &str) -> bool {
         let (file, ext) = file_and_ext(path);
         matches!(ext, "sh" | "bash" | "zsh" | "ksh")
-            || matches!(file, ".bashrc" | ".bash_profile" | ".zshrc" | ".profile" | "bashrc" | "zshrc" | "profile")
+            || matches!(
+                file,
+                ".bashrc" | ".bash_profile" | ".zshrc" | ".profile" | "bashrc" | "zshrc" | "profile"
+            )
     }
     fn grammar(&self, _: &str) -> Option<&'static str> {
         Some("bash")

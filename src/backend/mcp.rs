@@ -522,7 +522,9 @@ mod tests {
         let call = |name: &str, args: Value| call_tool(name, &args, &session.token);
 
         let log = call("git_log", json!({})).unwrap();
-        assert_eq!(log.lines().filter(|l| !l.starts_with(' ')).count(), 3, "{log}");
+        let expected = std::process::Command::new("git").args(["rev-list", "--count", &format!("{base}..HEAD")]).current_dir(root).output().unwrap();
+        let expected: usize = String::from_utf8_lossy(&expected.stdout).trim().parse().unwrap();
+        assert_eq!(log.lines().filter(|l| !l.starts_with(' ')).count(), expected.min(30), "{log}");
         assert!(call("git_log", json!({ "pr_only": false, "max_count": 2, "path": "README.md" })).unwrap().lines().count() <= 4);
         let blame = call("git_blame", json!({ "path": "README.md", "start_line": 1, "end_line": 2 })).unwrap();
         assert_eq!(blame.lines().count(), 2, "{blame}");

@@ -1928,6 +1928,7 @@ impl PrView {
                         "c" => "c",
                         "cpp" | "c++" => "cpp",
                         "python" | "py" => "python",
+                        "rust" | "rs" => "rust",
                         "bash" | "sh" | "shell" | "shellscript" => "bash",
                         _ => "",
                     };

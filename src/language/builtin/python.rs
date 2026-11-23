@@ -1,6 +1,6 @@
 //! Python, with pyright (bundled with the app, runs on Node.js).
-use crate::language::{Language, Requirement, ServerSpec, file_and_ext};
 use super::{installed, node_server};
+use crate::language::{Language, Requirement, ServerSpec, file_and_ext};
 use std::path::Path;
 
 pub struct Python;

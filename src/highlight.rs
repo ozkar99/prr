@@ -170,6 +170,22 @@ const PYTHON_EXTRA: &str = r##"
 (attribute attribute: (identifier) @property)
 "##;
 
+// VS Code Dark Modern for Rust: control flow purple, macros like functions,
+// `self`/`mut` like keywords, parameters and fields light blue.
+const RUST_EXTRA: &str = r##"
+(parameter pattern: (identifier) @variable.parameter)
+(field_identifier) @property
+(shorthand_field_identifier) @property
+(primitive_type) @type.builtin
+(self) @variable.builtin
+(mutable_specifier) @keyword
+(lifetime (identifier) @type)
+(macro_invocation macro: (identifier) @function "!" @function)
+(macro_invocation macro: (scoped_identifier name: (identifier) @function) "!" @function)
+["if" "else" "match" "for" "while" "loop" "return" "break" "continue" "in" "await"] @keyword.control
+(try_expression "?" @keyword.control)
+"##;
+
 const BASH_EXTRA: &str = r##"
 (comment) @comment
 (string) @string
@@ -222,6 +238,7 @@ fn lang(name: &str) -> Option<&'static Lang> {
             build(tree_sitter_python::LANGUAGE.into(), "python", PYTHON_EXTRA, &[tree_sitter_python::HIGHLIGHTS_QUERY])
         ),
         "bash" => cached!(BASH, build(tree_sitter_bash::LANGUAGE.into(), "bash", BASH_EXTRA, &[tree_sitter_bash::HIGHLIGHT_QUERY])),
+        "rust" => cached!(RUST, build(tree_sitter_rust::LANGUAGE.into(), "rust", RUST_EXTRA, &[tree_sitter_rust::HIGHLIGHTS_QUERY])),
         _ => None,
     }
 }
@@ -300,6 +317,22 @@ pub fn highlight(language: &str, text: &str) -> Vec<(Range<usize>, HighlightStyl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rust_control_flow_macros_and_types() {
+        let src = "fn main() -> Result<(), Error> {\n    let mut x: u32 = 1;\n    if x > 0 { println!(\"{x}\"); }\n    run(&self.field)?;\n    Ok(())\n}\n";
+        let hl = highlight("rust", src);
+        let color_at = |needle: &str| {
+            let at = src.find(needle).unwrap();
+            hl.iter().find(|(r, _)| r.start <= at && at < r.end).and_then(|(_, s)| s.color)
+        };
+        assert_eq!(color_at("if x"), Some(Hsla::from(rgb(0xC586C0))), "control flow");
+        assert_eq!(color_at("fn main"), Some(Hsla::from(rgb(0x569CD6))), "keyword");
+        assert_eq!(color_at("println"), Some(Hsla::from(rgb(0xDCDCAA))), "macro");
+        assert_eq!(color_at("u32"), Some(Hsla::from(rgb(0x4EC9B0))), "builtin type");
+        assert_eq!(color_at("mut"), Some(Hsla::from(rgb(0x569CD6))), "mut");
+        assert_eq!(color_at("?;"), Some(Hsla::from(rgb(0xC586C0))), "? operator");
+    }
 
     #[test]
     fn go_keywords_types_functions() {

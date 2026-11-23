@@ -1,7 +1,7 @@
 //! Go, with gopls.
+use super::installed;
 use crate::language::{Language, Requirement, ServerSpec, file_and_ext};
-use super::{installed};
-use serde_json::{json};
+use serde_json::json;
 use std::path::Path;
 
 pub struct Go;

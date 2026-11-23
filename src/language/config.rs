@@ -3,9 +3,9 @@
 //!
 //! ```toml
 //! [[language]]
-//! name = "Rust"
-//! extensions = ["rs"]
-//! command = "rust-analyzer"
+//! name = "Zig"
+//! extensions = ["zig"]
+//! command = "zls"
 //!
 //! [[language]]
 //! id = "go"                       # same id as a built-in: adjust it
@@ -50,7 +50,7 @@ pub struct Entry {
     pub env: BTreeMap<String, String>,
     /// LSP `languageId` (defaults to the id).
     pub language_id: Option<String>,
-    /// Borrow a built-in grammar for syntax colors: go, c, cpp, python or bash.
+    /// Borrow a built-in grammar for syntax colors: go, c, cpp, python, rust or bash.
     pub grammar: Option<String>,
     /// Shown when the server isn't installed.
     pub install: Option<String>,
@@ -72,7 +72,7 @@ impl Configured {
     }
 }
 
-const GRAMMARS: &[&str] = &["go", "c", "cpp", "python", "bash"];
+const GRAMMARS: &[&str] = &["go", "c", "cpp", "python", "rust", "bash"];
 
 impl Language for Configured {
     fn id(&self) -> &str {
@@ -182,7 +182,7 @@ pub fn parse(text: &str, builtins: &[Arc<dyn Language>], source: &str) -> (Vec<A
         };
         let base = builtins.iter().find(|b| b.id() == id).cloned();
         if base.is_none() && entry.extensions.is_empty() && entry.filenames.is_empty() {
-            errors.push(format!("{source}: language \"{id}\" needs extensions or filenames (or the id of a built-in: go, cpp, python, shell, starlark)"));
+            errors.push(format!("{source}: language \"{id}\" needs extensions or filenames (or the id of a built-in: go, cpp, python, rust, shell, starlark)"));
             continue;
         }
         if base.is_none() && entry.command.is_none() && entry.grammar.is_none() {
@@ -215,9 +215,9 @@ mod tests {
         let builtins = builtin::all();
         let toml = r#"
             [[language]]
-            name = "Rust"
-            extensions = ["rs"]
-            command = "rust-analyzer"
+            name = "Zig"
+            extensions = ["zig"]
+            command = "zls"
 
             [[language]]
             id = "go"
@@ -226,11 +226,11 @@ mod tests {
         "#;
         let (langs, errors) = parse(toml, &builtins, "test");
         assert!(errors.is_empty(), "{errors:?}");
-        let rust = langs.iter().find(|l| l.id() == "rust").unwrap();
-        assert!(rust.matches("src/main.rs") && !rust.matches("main.go"));
-        assert_eq!(rust.grammar("x.rs"), None);
-        let spec = rust.server(Path::new("/tmp")).unwrap().unwrap();
-        assert_eq!((spec.command.as_str(), spec.args.len()), ("rust-analyzer", 0));
+        let zig = langs.iter().find(|l| l.id() == "zig").unwrap();
+        assert!(zig.matches("src/main.zig") && !zig.matches("main.go"));
+        assert_eq!(zig.grammar("x.zig"), None);
+        let spec = zig.server(Path::new("/tmp")).unwrap().unwrap();
+        assert_eq!((spec.command.as_str(), spec.args.len()), ("zls", 0));
 
         let go = langs.iter().find(|l| l.id() == "go").unwrap();
         assert!(go.matches("cmd/main.go"), "an adjusted built-in keeps its files");
@@ -248,7 +248,7 @@ mod tests {
         let builtins = builtin::all();
         let (langs, errors) = parse("[[language]]\nname = \"Zig\"\ncommand = \"zls\"\n", &builtins, "test");
         assert!(langs.is_empty() && errors[0].contains("needs extensions"), "{errors:?}");
-        let (_, errors) = parse("[[language]]\nname = \"X\"\nextensions = [\"x\"]\ngrammar = \"rust\"\n", &builtins, "test");
+        let (_, errors) = parse("[[language]]\nname = \"X\"\nextensions = [\"x\"]\ngrammar = \"kotlin\"\n", &builtins, "test");
         assert!(errors[0].contains("grammar must be"), "{errors:?}");
         let (_, errors) = parse("[[language]\n", &builtins, "test");
         assert!(!errors.is_empty());

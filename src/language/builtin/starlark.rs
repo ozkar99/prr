@@ -1,7 +1,7 @@
 //! Starlark / Bazel, with starpls.
+use super::installed;
 use crate::language::{Language, Requirement, ServerSpec, file_and_ext};
-use super::{installed};
-use serde_json::{Value};
+use serde_json::Value;
 use std::path::Path;
 
 pub struct Starlark;
@@ -25,7 +25,12 @@ impl Language for Starlark {
         "starpls".into()
     }
     fn server(&self, _root: &Path) -> Option<Result<ServerSpec, String>> {
-        Some(Ok(ServerSpec { command: "starpls".into(), args: vec!["server".into()], initialization_options: Value::Null, ..Default::default() }))
+        Some(Ok(ServerSpec {
+            command: "starpls".into(),
+            args: vec!["server".into()],
+            initialization_options: Value::Null,
+            ..Default::default()
+        }))
     }
     fn install_hint(&self) -> String {
         "download starpls from https://github.com/withered-magic/starpls/releases and put it on your PATH".into()

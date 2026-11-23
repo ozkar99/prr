@@ -1,8 +1,8 @@
 //! C, C++ and Objective-C, with clangd. Without compile_commands.json it
 //! guesses flags, and says so in the header.
+use super::installed;
 use crate::language::{Language, Requirement, ServerSpec, file_and_ext};
-use super::{installed};
-use serde_json::{json};
+use serde_json::json;
 use std::path::Path;
 
 pub struct Cpp;
@@ -29,7 +29,10 @@ impl Language for Cpp {
         "C / C++"
     }
     fn matches(&self, path: &str) -> bool {
-        matches!(file_and_ext(path).1, "c" | "h" | "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" | "ipp" | "inl" | "m" | "mm")
+        matches!(
+            file_and_ext(path).1,
+            "c" | "h" | "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" | "ipp" | "inl" | "m" | "mm"
+        )
     }
     fn grammar(&self, _: &str) -> Option<&'static str> {
         // Headers are usually C++ in mixed repos; the C++ grammar parses C fine.
@@ -49,8 +52,14 @@ impl Language for Cpp {
     }
     fn server(&self, root: &Path) -> Option<Result<ServerSpec, String>> {
         let command = if Path::new(CLANGD_BREW).exists() { CLANGD_BREW } else { "clangd" };
-        let mut args: Vec<String> =
-            ["--background-index", "--header-insertion=never", "--clang-tidy=false", "--pch-storage=memory"].map(String::from).into();
+        let mut args: Vec<String> = [
+            "--background-index",
+            "--header-insertion=never",
+            "--clang-tidy=false",
+            "--pch-storage=memory",
+        ]
+        .map(String::from)
+        .into();
         let compile_commands = ["", "build", "out", "cmake-build-debug", "builddir"]
             .iter()
             .map(|d| if d.is_empty() { root.to_path_buf() } else { root.join(d) })
