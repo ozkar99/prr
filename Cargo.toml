@@ -1,6 +1,6 @@
 [package]
 name = "review-tool"
-version = "4.1.5"
+version = "4.1.6"
 edition = "2024"
 description = "Review GitHub pull requests with real code intelligence (native Rust UI)"
 
