@@ -25,11 +25,27 @@ Xcode Command Line Tools (`xcode-select --install`) for git and clangd.
 brew tap ozkar99/prr https://github.com/ozkar99/prr
 brew trust --cask ozkar99/prr/prr   # Homebrew asks before using a third-party tap
 brew install --cask prr
-gh auth login                                       # once: the app uses gh's GitHub login
 ```
 
 This puts **prr** in Applications and the `prr` command on your `PATH`, and
-installs the GitHub CLI (`gh`) and Node.js if you don't have them.
+installs Node.js if you don't have it.
+
+### GitHub access
+
+prr has no login of its own. It uses the first GitHub token it finds:
+
+1. one saved in **Settings → GitHub token** (kept in your macOS Keychain),
+2. the `GH_TOKEN` or `GITHUB_TOKEN` environment variable (only when you start prr from a terminal),
+3. the [GitHub CLI](https://cli.github.com)'s login, if `gh` is installed,
+4. git's saved credentials for `https://github.com`, such as the token macOS Keychain stored the
+   last time you pushed over HTTPS.
+
+If none of these work for you, create a
+[personal access token](https://github.com/settings/personal-access-tokens) with read access to the
+repositories you review (and write access to pull requests, to post reviews), and paste it in
+Settings. If your organization uses SAML single sign-on, authorize the token for it. The home screen
+shows which token is in use and the account it belongs to. prr's own clones use the same token over
+HTTPS, so SSH keys aren't needed.
 
 Update with `brew upgrade --cask prr`. Uninstall with `brew uninstall --cask prr`
 (add `--zap` to also remove its checkouts and settings).
@@ -281,7 +297,7 @@ The sidebar's width, the diff's split and the agent panel's height are remembere
 
 | Problem | Fix |
 |---|---|
-| "Couldn't load pull requests" | Check `gh auth status`; run `gh auth refresh -h github.com` if the token is invalid. |
+| "Couldn't load pull requests" or "GitHub rejected the token" | Settings shows which token is in use; replace it with a working one (see [GitHub access](#github-access)). |
 | A server chip says **not installed** | Install it (hover the chip for the command), then reopen the PR. |
 | A server chip says **failed** | Hover it to see the error. |
 | C++ types are wrong or headers don't resolve | clangd needs `compile_commands.json` (below). |

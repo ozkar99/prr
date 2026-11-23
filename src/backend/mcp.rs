@@ -407,6 +407,8 @@ fn call_tool(name: &str, args: &Value, token: &str) -> Result<String, String> {
             let out = std::process::Command::new("git")
                 .args(["diff", "--no-color", base, "--", &path])
                 .current_dir(root)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .envs(crate::backend::auth::git_env_now())
                 .output()
                 .map_err(|e| e.to_string())?;
             let diff = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -475,7 +477,13 @@ fn call_tool(name: &str, args: &Value, token: &str) -> Result<String, String> {
             }
             cmd.push("--".into());
             cmd.extend(path);
-            let out = std::process::Command::new("git").args(&cmd).current_dir(&root).output().map_err(|e| e.to_string())?;
+            let out = std::process::Command::new("git")
+                .args(&cmd)
+                .current_dir(&root)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .envs(crate::backend::auth::git_env_now())
+                .output()
+                .map_err(|e| e.to_string())?;
             if !out.status.success() {
                 return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
             }

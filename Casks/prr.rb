@@ -13,7 +13,6 @@ cask "prr" do
   desc "Review GitHub pull requests with real code intelligence"
   homepage "https://github.com/ozkar99/prr"
 
-  depends_on formula: "gh"   # GitHub access; the app reuses its login
   depends_on formula: "node" # runs pyright and bash-language-server (Python and shell support)
 
   app "prr.app"
@@ -37,8 +36,9 @@ cask "prr" do
   ]
 
   caveats <<~EOS
-    Log in to GitHub if you haven't (the app uses gh's login):
-      gh auth login
+    prr finds a GitHub token by itself (gh's login, $GH_TOKEN, or git's
+    credentials for https://github.com). Without one, add a token in
+    prr → Settings (⌘,).
     Open a PR with:
       prr owner/repo#123
   EOS

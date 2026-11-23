@@ -92,10 +92,18 @@ fn apply(cx: &mut App) {
 
 pub enum SettingsEvent {
     Close,
+    /// The saved GitHub token changed: check GitHub access again.
+    GitHubTokenChanged,
 }
 
 pub struct SettingsView {
     agent_command: Entity<InputState>,
+    github_token: Entity<InputState>,
+    /// Whether a token is saved in the Keychain.
+    token_saved: bool,
+    token_error: Option<String>,
+    /// Where the token in use comes from (None: none found yet).
+    token_in_use: Option<String>,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -116,7 +124,66 @@ impl SettingsView {
                 update(cx, |s| s.agent_command = value);
             }
         });
-        Self { agent_command, focus: cx.focus_handle(), _subs: vec![sub] }
+        let github_token = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("ghp_… or github_pat_…"));
+        let token_sub = cx.subscribe_in(&github_token, window, |this: &mut Self, _, ev: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = ev {
+                this.save_token(window, cx);
+            }
+        });
+        let token_saved = crate::backend::auth::saved().is_some();
+        let mut this = Self { agent_command, github_token, token_saved, token_error: None, token_in_use: None, focus: cx.focus_handle(), _subs: vec![sub, token_sub] };
+        this.load_token_in_use(cx);
+        this
+    }
+
+    fn load_token_in_use(&mut self, cx: &mut Context<Self>) {
+        let fut = crate::backend::task(async { crate::backend::auth::token().await.map(|t| t.source.describe()).ok() });
+        cx.spawn(async move |this, cx| {
+            let source = fut.await;
+            this.update(cx, |this, cx| {
+                this.token_in_use = source;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn save_token(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.github_token.read(cx).value().trim().to_string();
+        if value.is_empty() {
+            return;
+        }
+        match crate::backend::auth::save(&value) {
+            Ok(()) => {
+                self.token_saved = true;
+                self.token_error = None;
+                self.github_token.update(cx, |input, cx| input.set_value("", window, cx));
+                self.token_changed(cx);
+            }
+            Err(e) => self.token_error = Some(format!("Couldn't save it in the Keychain: {e}")),
+        }
+        cx.notify();
+    }
+
+    fn remove_token(&mut self, cx: &mut Context<Self>) {
+        crate::backend::auth::remove();
+        self.token_saved = false;
+        self.token_changed(cx);
+        cx.notify();
+    }
+
+    fn token_changed(&mut self, cx: &mut Context<Self>) {
+        let forget = crate::backend::task(crate::backend::auth::forget());
+        cx.spawn(async move |this, cx| {
+            forget.await;
+            this.update(cx, |this, cx| {
+                this.load_token_in_use(cx);
+                cx.emit(SettingsEvent::GitHubTokenChanged)
+            })
+            .ok();
+        })
+        .detach();
     }
 }
 
@@ -157,7 +224,10 @@ fn row(label: &str, help: Option<&str>, control: impl IntoElement) -> impl IntoE
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.focus.contains_focused(window, cx) && !self.agent_command.read(cx).focus_handle(cx).is_focused(window) {
+        if !self.focus.contains_focused(window, cx)
+            && !self.agent_command.read(cx).focus_handle(cx).is_focused(window)
+            && !self.github_token.read(cx).focus_handle(cx).is_focused(window)
+        {
             window.focus(&self.focus, cx);
         }
         let s = get(cx).clone();
@@ -208,6 +278,35 @@ impl Render for SettingsView {
                             .child(div().flex_1().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("Settings"))
                             .child(ui::link("settings-close", "✕").on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close)))),
                     )
+                    .child(row(
+                        "GitHub token",
+                        Some("Optional. Saved in your macOS Keychain."),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(8.))
+                                    .items_center()
+                                    .child(div().flex_1().child(Input::new(&self.github_token)))
+                                    .child(ui::button("token-save", if self.token_saved { "Replace" } else { "Save" }).on_click(cx.listener(|this, _, window, cx| this.save_token(window, cx)))),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(8.))
+                                    .text_size(theme::TEXT_SMALL)
+                                    .child(match &self.token_in_use {
+                                        Some(source) => div().child(format!("In use: {source}.")),
+                                        None => div().text_color(hsla(theme::WARN)).child("No token found."),
+                                    })
+                                    .when(self.token_saved, |el| el.child(ui::link("token-remove", "Remove saved token").on_click(cx.listener(|this, _, _, cx| this.remove_token(cx))))),
+                            )
+                            .children(self.token_error.clone().map(|e| div().text_size(theme::TEXT_SMALL).text_color(hsla(theme::DEL)).child(e)))
+                            .child(ui::muted("Without one, prr uses $GH_TOKEN or $GITHUB_TOKEN, the GitHub CLI's login, or git's saved credentials for https://github.com, in that order. A personal access token needs read access to the repositories (and write access to post reviews); for an organization with SAML single sign-on, authorize it for the organization.").text_size(theme::TEXT_SMALL)),
+                    ))
                     .child(row(
                         "Agent command",
                         Some("Runs in the agent panel, in the PR's checkout. Leave empty for Claude Code."),

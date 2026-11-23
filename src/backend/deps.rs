@@ -1,7 +1,8 @@
 //! Which external tools are available on this machine, for the setup check on
-//! the home screen. git and a logged-in gh are required; the rest unlock
+//! the home screen. git and a GitHub token are required; the rest unlock
 //! language features or the agent panel.
-use crate::backend::exec::{run, which};
+use crate::backend::auth;
+use crate::backend::exec::which;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -32,12 +33,7 @@ fn tool(name: &str, purpose: &str, required: bool, installed: bool, fix: &str) -
 pub async fn check() -> Vec<ToolStatus> {
     let has = |cmd: &str| which(cmd).is_some();
 
-    let mut gh = tool("gh", "GitHub access (the app uses its login)", true, has("gh"), "brew install gh && gh auth login");
-    if gh.ok && run("gh", &["auth", "status"], None, &[]).await.is_err() {
-        gh.ok = false;
-        gh.problem = Some("not logged in".into());
-        gh.fix = Some("gh auth login".into());
-    }
+    let github = github_status().await;
 
     let agent = crate::backend::agent::info();
     let agent_status = match &agent.command {
@@ -53,7 +49,7 @@ pub async fn check() -> Vec<ToolStatus> {
         None => tool("claude", "agent panel (Claude Code)", false, has("claude"), "curl -fsSL https://claude.ai/install.sh | bash"),
     };
 
-    let mut tools = vec![tool("git", "checking out PRs", true, has("git"), "xcode-select --install"), gh];
+    let mut tools = vec![tool("git", "checking out PRs", true, has("git"), "xcode-select --install"), github];
     // Each language's server (built-in or from languages.toml), once per tool.
     let registry = crate::language::registry();
     for lang in registry.all() {
@@ -68,4 +64,29 @@ pub async fn check() -> Vec<ToolStatus> {
     }
     tools.push(agent_status);
     tools
+}
+
+/// Whether there's a GitHub token, where it came from, and that GitHub takes it.
+async fn github_status() -> ToolStatus {
+    let mut status = ToolStatus { name: "GitHub".into(), purpose: String::new(), required: true, ok: false, problem: None, fix: Some(auth::HOW_TO_FIX.into()) };
+    let token = match auth::token().await {
+        Ok(t) => t,
+        Err(_) => {
+            status.purpose = "access to pull requests".into();
+            status.problem = Some("no token found (Settings, $GH_TOKEN, gh, or git credentials for github.com)".into());
+            return status;
+        }
+    };
+    match crate::backend::github::viewer().await {
+        Ok(login) => {
+            status.ok = true;
+            status.fix = None;
+            status.purpose = format!("signed in as @{login}, using {}", token.source.describe());
+        }
+        Err(e) => {
+            status.purpose = format!("using {}", token.source.describe());
+            status.problem = Some(e);
+        }
+    }
+    status
 }

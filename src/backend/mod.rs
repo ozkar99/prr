@@ -6,6 +6,7 @@
 //! executor, so backend work is started on a tokio runtime with [`task`] and the
 //! resulting future is awaited from gpui (`cx.spawn`).
 pub mod agent;
+pub mod auth;
 pub mod cleanup;
 pub mod deps;
 pub mod exec;
@@ -28,6 +29,11 @@ fn runtime() -> &'static tokio::runtime::Runtime {
             .build()
             .expect("failed to start the backend runtime")
     })
+}
+
+/// Runs `fut` to completion on the backend runtime, blocking this thread (the CLI).
+pub fn block_on<T>(fut: impl Future<Output = T>) -> T {
+    runtime().block_on(fut)
 }
 
 /// Runs `fut` on the backend's tokio runtime; the returned future can be awaited
