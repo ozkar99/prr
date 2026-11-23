@@ -10,7 +10,11 @@ PR can be:
   https://github.com/owner/repo/pull/123   a PR URL
   owner/repo#123                           a PR reference
   123                                      PR number in the GitHub repo of the current directory
-  (nothing)                                the PR for the current branch, or just open the app";
+  (nothing)                                the PR for the current branch, or just open the app
+
+Options:
+  -h, --help       show this help
+  -v, --version    show the version";
 
 fn fail(message: &str) -> ! {
     eprintln!("review-tool: {message}");
@@ -65,7 +69,11 @@ fn app_bundle() -> Option<PathBuf> {
 /// (launched by macOS, or with the internal --open-pr argument).
 pub fn handle(args: &[String]) -> bool {
     let user_args: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
-    // Internal launch, or `npm run dev` (which starts the binary from a terminal).
+    if user_args.iter().any(|a| *a == "-v" || *a == "--version") {
+        println!("review-tool {}", env!("CARGO_PKG_VERSION"));
+        return true;
+    }
+    // Internal launch (macOS or this command passing --open-pr).
     if user_args.iter().any(|a| a.starts_with("--open-pr=")) || std::env::var_os("REVIEW_TOOL_APP").is_some() {
         return false;
     }

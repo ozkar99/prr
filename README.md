@@ -58,6 +58,7 @@ review-tool https://github.com/owner/repo/pull/123   # a PR URL
 review-tool owner/repo#123                           # a PR reference
 review-tool 123                                      # inside a clone: PR #123 of that repo
 review-tool                                          # inside a clone: the PR for your current branch
+review-tool --version                                # the installed version (-v); --help for usage
 ```
 
 Or open the app and pick a PR from **Review requested** / **Your pull requests**, or paste a URL
