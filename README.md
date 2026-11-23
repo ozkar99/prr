@@ -253,8 +253,11 @@ scripts/bundle-macos.sh universal   # Apple Silicon + Intel
 The app's own binary is the command. Link it onto your `PATH`:
 
 ```sh
-ln -sf "$PWD/dist/Review Tool.app/Contents/MacOS/review-tool" /opt/homebrew/bin/review-tool
+ln -sf "$PWD/dist/review-tool" /opt/homebrew/bin/review-tool
 ```
+
+(`dist/review-tool` is a symlink into the app bundle made by `scripts/bundle-macos.sh`; the
+command needs the bundle next to it.)
 
 The app allows a single instance: `review-tool <pr>` hands the PR to the open window. Development
 builds use a separate instance, so they don't interfere with the installed app.

@@ -67,6 +67,10 @@ echo "bundled pyright $PYRIGHT, bash-language-server $BASH_LS"
 
 codesign --force --deep --sign - "$APP"
 
+# The app's binary is also the `review-tool` command; a symlink keeps it inside the
+# bundle (it finds its language servers and the app through its real location).
+ln -sf "$NAME.app/Contents/MacOS/review-tool" dist/review-tool
+
 # The DMG name matches what GitHub serves for "Review Tool_…" uploads (the cask's URL).
 DMG="dist/Review.Tool_${VERSION}_${ARCH}.dmg"
 STAGE=$(mktemp -d)
@@ -75,4 +79,4 @@ ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -quiet -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 rm -rf "$STAGE"
-echo "built $APP and $DMG"
+echo "built $APP, $DMG and dist/review-tool (the command)"

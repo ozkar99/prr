@@ -65,7 +65,8 @@ fn install_hint(lang: &str) -> &'static str {
 /// (scripts/bundle-macos.sh); development builds use target/language-servers
 /// (`npm install --prefix target/language-servers pyright bash-language-server`).
 fn bundled(rel: &str) -> Option<PathBuf> {
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    // Resolved, so a symlinked `review-tool` command still finds the bundle's Resources.
+    let exe_dir = std::env::current_exe().ok()?.canonicalize().ok()?.parent()?.to_path_buf();
     let candidates = [
         exe_dir.join("../Resources/language-servers/node_modules").join(rel),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/language-servers/node_modules").join(rel),
