@@ -13,6 +13,7 @@
 //!   {"op":"type","text":"hello"}                  text input
 //!   {"op":"open","url":"https://github.com/o/r/pull/1"}
 //!   {"op":"shot","path":"/tmp/x.png"}             screenshot of the window
+//!   {"op":"front"}                                bring the window forward (covered windows don't redraw)
 //!   {"op":"info"}                                 window size and number
 #![cfg(debug_assertions)]
 use futures::StreamExt;
@@ -159,6 +160,12 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App, open_pr: &dyn Fn(String, 
                 }
                 None => json!({ "error": "no window number" }),
             }
+        }
+        // Covered windows aren't redrawn: bring this one forward before a "shot".
+        "front" => {
+            cx.activate(true);
+            window.activate_window();
+            ok
         }
         "info" => {
             let size = window.viewport_size();

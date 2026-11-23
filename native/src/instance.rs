@@ -7,8 +7,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
+/// Development builds get their own socket, so they never hand off to (or take
+/// launches from) the installed app.
 fn socket_path() -> PathBuf {
-    data_dir().join("instance.sock")
+    data_dir().join(if cfg!(debug_assertions) { "instance-dev.sock" } else { "instance.sock" })
 }
 
 /// What a launch asks the running app to do: open a PR, or just come forward.

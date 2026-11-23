@@ -1490,25 +1490,61 @@ impl PrView {
         ))
     }
 
-    /// VS Code-style hover widget with the server's Markdown.
+    /// VS Code-style hover widget: code blocks as colored code (no box or
+    /// language label, like Monaco), text as Markdown, separators between parts.
     fn render_hover(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let hover = self.hover.as_ref()?;
         let at = point(hover.point.x, hover.point.y + px(10.));
+        let mut parts = div().flex().flex_col();
+        for (i, part) in hover_parts(&hover.markdown).into_iter().enumerate() {
+            let section = div().px(px(8.)).py(px(4.)).when(i > 0, |el| el.border_t_1().border_color(hsla(0x454545)));
+            parts = parts.child(match part {
+                HoverPart::Code(language, code) => {
+                    let language = match language.as_str() {
+                        "go" => "go",
+                        "c" => "c",
+                        "cpp" | "c++" => "cpp",
+                        "python" | "py" => "python",
+                        "bash" | "sh" | "shell" | "shellscript" => "bash",
+                        _ => "",
+                    };
+                    let lines: Vec<AnyElement> = code
+                        .lines()
+                        .map(|line| {
+                            let highlights = if language.is_empty() { Vec::new() } else { highlight::highlight(language, line) };
+                            div().child(StyledText::new(line.to_string()).with_highlights(highlights)).into_any_element()
+                        })
+                        .collect();
+                    section
+                        .font_family(theme::MONO_FONT)
+                        .text_size(px(crate::settings::get(cx).editor_font_size))
+                        .line_height(px(19.5))
+                        .whitespace_nowrap()
+                        .children(lines)
+                        .into_any_element()
+                }
+                HoverPart::Text(md) => section
+                    .line_height(px(19.5))
+                    .child(TextView::markdown(SharedString::from(format!("lsp-hover-{i}")), md).style(crate::review::markdown_style(cx)).selectable(true))
+                    .into_any_element(),
+            });
+        }
         Some(deferred(
             anchored().position(at).snap_to_window_with_margin(px(8.)).child(
                 div()
                     .id("lsp-hover")
                     .occlude()
-                    .max_w(px(600.))
+                    .max_w(px(750.))
                     .max_h(px(360.))
                     .overflow_y_scroll()
-                    .p(px(8.))
+                    .py(px(2.))
                     .bg(hsla(0x202020))
                     .border_1()
                     .border_color(hsla(0x454545))
-                    .rounded(px(3.))
+                    .rounded(px(8.))
                     .shadow_md()
                     .text_size(theme::TEXT)
+                    .text_color(hsla(theme::FG))
                     .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                         this.hover_over_popup = *hovered;
                         if !*hovered {
@@ -1516,10 +1552,55 @@ impl PrView {
                             cx.notify();
                         }
                     }))
-                    .child(TextView::markdown("lsp-hover-md", hover.markdown.clone()).selectable(true)),
+                    .child(parts),
             ),
         ))
     }
+}
+
+enum HoverPart {
+    Code(String, String),
+    Text(String),
+}
+
+/// Splits hover Markdown into fenced code blocks and text, dropping `---` rules
+/// (each part gets a separator instead, as in VS Code).
+fn hover_parts(markdown: &str) -> Vec<HoverPart> {
+    let mut parts = Vec::new();
+    let mut text = String::new();
+    let mut code: Option<(String, String)> = None;
+    let flush = |text: &mut String, parts: &mut Vec<HoverPart>| {
+        let t = text.trim();
+        if !t.is_empty() {
+            parts.push(HoverPart::Text(t.to_string()));
+        }
+        text.clear();
+    };
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        if let Some((lang, body)) = code.as_mut() {
+            if trimmed.starts_with("```") {
+                parts.push(HoverPart::Code(std::mem::take(lang), body.trim_end().to_string()));
+                code = None;
+            } else {
+                body.push_str(line);
+                body.push('\n');
+            }
+        } else if let Some(lang) = trimmed.strip_prefix("```") {
+            flush(&mut text, &mut parts);
+            code = Some((lang.trim().to_lowercase(), String::new()));
+        } else if matches!(trimmed.trim_end(), "---" | "***" | "___") {
+            flush(&mut text, &mut parts);
+        } else {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    if let Some((lang, body)) = code {
+        parts.push(HoverPart::Code(lang, body.trim_end().to_string()));
+    }
+    flush(&mut text, &mut parts);
+    parts
 }
 
 /// Where the first change in a file's patch is, for scrolling there on open.
@@ -1626,6 +1707,15 @@ async fn plain_patch(abs: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hover_parts_split_code_text_and_rules() {
+        let md = "```go\nfunc os.Getenv(key string) string\n```\n\n---\n\nGetenv retrieves the value.\n\n[`os.Getenv` on pkg.go.dev](https://pkg.go.dev/os#Getenv)";
+        let parts = super::hover_parts(md);
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], super::HoverPart::Code(l, c) if l == "go" && c == "func os.Getenv(key string) string"));
+        assert!(matches!(&parts[1], super::HoverPart::Text(t) if t.starts_with("Getenv retrieves") && t.contains("pkg.go.dev")));
+    }
+
     #[tokio::test]
     async fn plain_patch_keeps_absolute_path() {
         let abs = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
