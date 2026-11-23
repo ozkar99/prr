@@ -149,8 +149,8 @@ the code's right-click menu:
 
 | Command | Shortcut | What happens |
 |---|---|---|
-| **Agent: About this code** | ⌘L | Types `About <file> lines A-B: ` into the agent; you finish the question. |
 | **Agent: Explain this code** | ⌘⇧L | Sends `Explain <file> lines A-B.` right away. |
+| **Agent: About this code** | ⌘L | Types `About <file> lines A-B: ` into the agent; you finish the question. |
 
 Lines from the left side of a diff are marked as the old version. If the agent is still
 starting, the text is typed once it's ready. It's never typed into a question the agent is asking
