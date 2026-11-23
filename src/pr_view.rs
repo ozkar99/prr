@@ -71,6 +71,8 @@ struct Peek {
     point: Point<Pixels>,
     title: SharedString,
     items: Vec<PeekItem>,
+    /// The item previewed on the left.
+    selected: usize,
 }
 
 struct PeekItem {
@@ -919,7 +921,16 @@ impl PrView {
                 PeekItem { label: self.relative(&loc.path).unwrap_or(loc.path.clone()), abs: loc.path, line: loc.line as usize + 1, text: text.trim().to_string() }
             })
             .collect();
-        self.peek = Some(Peek { point, title: title.into(), items });
+        let mut items: Vec<PeekItem> = items;
+        // Grouped by file (stable order of first appearance), then by line, like VS Code.
+        let mut order: Vec<String> = Vec::new();
+        for item in &items {
+            if !order.contains(&item.abs) {
+                order.push(item.abs.clone());
+            }
+        }
+        items.sort_by_key(|i| (order.iter().position(|a| a == &i.abs), i.line));
+        self.peek = Some(Peek { point, title: title.into(), items, selected: 0 });
         cx.notify();
     }
 
@@ -1423,20 +1434,109 @@ impl PrView {
     }
 
     /// VS Code-style peek list: file, line and the line's code; click to open.
-    fn render_peek(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_peek(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let peek = self.peek.as_ref()?;
-        let at = point(peek.point.x, peek.point.y + px(12.));
+        let at = point(peek.point.x.min(px(600.)), peek.point.y + px(12.));
+        let title = peek.title.clone();
+        let selected = peek.selected.min(peek.items.len().saturating_sub(1));
+        let target = peek.items.get(selected).map(|i| (i.abs.clone(), i.label.clone(), i.line));
+        let items: Vec<(String, String, usize, String)> = peek.items.iter().map(|i| (i.abs.clone(), i.label.clone(), i.line, i.text.clone())).collect();
+
+        // Code preview of the selected location (about a dozen lines around it).
+        let font_size = px(crate::settings::get(cx).editor_font_size);
+        let row_h = px(theme::code_row_height(f32::from(font_size)));
+        let mut preview = div().flex().flex_col().font_family(theme::MONO_FONT).text_size(font_size).line_height(row_h).whitespace_nowrap();
+        if let Some((abs, _, line)) = &target
+            && let Some(lines) = self.lines_of(abs)
+        {
+            let language = highlight::language_for(abs);
+            let first = line.saturating_sub(4).max(1);
+            let last = (first + 13).min(lines.len());
+            for n in first..=last {
+                let text = lines.get(n - 1).cloned().unwrap_or_default();
+                let highlights = highlight::highlight(language, &text);
+                preview = preview.child(
+                    div()
+                        .flex()
+                        .h(row_h)
+                        .when(n == *line, |el| el.bg(gpui::rgba(0xff8f0026)))
+                        .child(div().w(px(48.)).flex_shrink_0().pr(px(12.)).text_right().text_color(hsla(if n == *line { 0xcccccc } else { 0x6e7681 })).child(n.to_string()))
+                        .child(StyledText::new(text).with_highlights(highlights)),
+                );
+            }
+        }
+
+        // Results grouped by file.
+        let mut list = div().flex().flex_col().py(px(2.));
+        let mut last_file: Option<String> = None;
+        for (i, (abs, label, line, text)) in items.iter().enumerate() {
+            if last_file.as_deref() != Some(abs.as_str()) {
+                let count = items.iter().filter(|x| &x.0 == abs).count();
+                let (dir, name) = match label.rfind('/') {
+                    Some(k) => (label[..k].to_string(), label[k + 1..].to_string()),
+                    None => (String::new(), label.clone()),
+                };
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .px(px(8.))
+                        .h(px(22.))
+                        .whitespace_nowrap()
+                        .child(div().flex_shrink_0().child(name))
+                        .child(div().flex_1().min_w_0().truncate().text_size(theme::TEXT_TINY).text_color(hsla(theme::MUTED)).child(dir))
+                        .child(div().flex_shrink_0().px(px(6.)).rounded(px(8.)).bg(hsla(0x4d4d4d)).text_size(theme::TEXT_TINY).child(count.to_string())),
+                );
+                last_file = Some(abs.clone());
+            }
+            let (abs, line) = (abs.clone(), *line);
+            list = list.child(
+                div()
+                    .id(("peek-item", i))
+                    .flex()
+                    .gap(px(6.))
+                    .pl(px(22.))
+                    .pr(px(8.))
+                    .h(px(22.))
+                    .items_center()
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .when(i == selected, |el| el.bg(hsla(theme::ACTIVE)))
+                    .when(i != selected, |el| el.hover(|el| el.bg(hsla(theme::HOVER))))
+                    .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                        // Click previews; double-click opens (as in VS Code's peek).
+                        if ev.click_count() >= 2 {
+                            this.peek = None;
+                            this.open_location(&abs, line, cx);
+                        } else if let Some(peek) = this.peek.as_mut() {
+                            peek.selected = i;
+                            cx.notify();
+                        }
+                    }))
+                    .child(div().flex_1().min_w_0().truncate().font_family(theme::MONO_FONT).text_size(theme::TEXT_SMALL).child(text.clone())),
+            );
+        }
+
+        let header_title = match &target {
+            Some((_, label, _)) => label.clone(),
+            None => String::new(),
+        };
         Some(deferred(
             anchored().position(at).snap_to_window_with_margin(px(8.)).child(
                 div()
                     .id("peek")
                     .occlude()
-                    .w(px(640.))
+                    .w(px(880.))
+                    .flex()
+                    .flex_col()
                     .bg(hsla(0x1f1f1f))
-                    .border_1()
-                    .border_color(hsla(theme::ACCENT))
-                    .rounded(px(3.))
+                    .border_t_2()
+                    .border_b_2()
+                    .border_color(hsla(0x3794ff))
                     .shadow_lg()
+                    .text_size(theme::TEXT)
+                    .text_color(hsla(theme::FG))
                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                         this.peek = None;
                         cx.notify();
@@ -1445,60 +1545,35 @@ impl PrView {
                         div()
                             .flex()
                             .items_center()
+                            .gap(px(8.))
                             .px(px(10.))
-                            .py(px(4.))
+                            .h(px(26.))
                             .bg(hsla(0x252526))
-                            .border_b_1()
-                            .border_color(hsla(theme::BORDER))
-                            .text_size(theme::TEXT_SMALL)
-                            .child(div().flex_1().child(peek.title.clone()))
+                            .child(div().flex_shrink_0().child(header_title))
+                            .child(div().flex_1().text_color(hsla(theme::MUTED)).text_size(theme::TEXT_SMALL).child(title))
                             .child(
-                                div()
-                                    .id("peek-close")
-                                    .cursor_pointer()
-                                    .text_color(hsla(theme::MUTED))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.peek = None;
-                                        cx.notify();
-                                    }))
-                                    .child("✕"),
+                                ui::link("peek-close", "✕").on_click(cx.listener(|this, _, _, cx| {
+                                    this.peek = None;
+                                    cx.notify();
+                                })),
                             ),
                     )
                     .child(
-                        div().id("peek-list").max_h(px(320.)).overflow_y_scroll().py(px(2.)).children(peek.items.iter().enumerate().map(|(i, item)| {
-                            let (abs, line) = (item.abs.clone(), item.line);
-                            div()
-                                .id(("peek-item", i))
-                                .flex()
-                                .gap(px(10.))
-                                .px(px(10.))
-                                .py(px(2.))
-                                .cursor_pointer()
-                                .hover(|el| el.bg(hsla(theme::HOVER)))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.peek = None;
-                                    this.open_location(&abs, line, cx);
-                                }))
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .max_w(px(260.))
-                                        .truncate()
-                                        .text_size(theme::TEXT_SMALL)
-                                        .text_color(hsla(theme::FG))
-                                        .child(format!("{}:{}", item.label, item.line)),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .font_family(theme::MONO_FONT)
-                                        .text_size(theme::TEXT_SMALL)
-                                        .text_color(hsla(theme::MUTED))
-                                        .child(item.text.clone()),
-                                )
-                        })),
+                        div()
+                            .flex()
+                            .h(px(280.))
+                            .child(div().id("peek-preview").flex_1().min_w_0().overflow_hidden().pt(px(4.)).child(preview))
+                            .child(
+                                div()
+                                    .id("peek-list")
+                                    .w(px(300.))
+                                    .flex_shrink_0()
+                                    .overflow_y_scroll()
+                                    .bg(hsla(0x1f1f1f))
+                                    .border_l_1()
+                                    .border_color(hsla(theme::BORDER))
+                                    .child(list),
+                            ),
                     ),
             ),
         ))
@@ -1660,6 +1735,25 @@ impl Render for PrView {
             .on_action(cx.listener(Self::on_go_to_definition))
             .on_action(cx.listener(Self::on_find_references))
             .on_action(cx.listener(Self::on_peek_definition))
+            // While a peek is open: ↑/↓ choose a result, Enter opens it.
+            .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                let Some(peek) = this.peek.as_mut() else { return };
+                let n = peek.items.len();
+                match ev.keystroke.key.as_str() {
+                    "up" if n > 0 => peek.selected = (peek.selected + n - 1) % n,
+                    "down" if n > 0 => peek.selected = (peek.selected + 1) % n,
+                    "enter" => {
+                        if let Some(item) = peek.items.get(peek.selected) {
+                            let (abs, line) = (item.abs.clone(), item.line);
+                            this.peek = None;
+                            this.open_location(&abs, line, cx);
+                        }
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
             // The mouse's back button goes back, like VS Code.
             .on_mouse_down(
                 MouseButton::Navigate(NavigationDirection::Back),
@@ -1702,7 +1796,10 @@ impl Render for PrView {
                     .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_1().min_h_0().flex().child(main)).children(dock))
             })
             .children(self.render_hover(cx))
-            .children(self.render_peek(cx))
+            .children({
+                let peek = self.render_peek(cx);
+                peek
+            })
     }
 }
 
