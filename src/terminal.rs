@@ -93,7 +93,16 @@ pub struct TerminalView {
     pub last_output: Option<Instant>,
     /// Where the left button went down (for drag selection), in grid points.
     selecting: bool,
+    /// Scroll movement smaller than a line, kept between events (trackpads send tiny deltas).
+    scroll_rest: f32,
+    /// Dragging the scrollbar thumb.
+    scrollbar_drag: bool,
+    /// Where the grid is drawn (for the scrollbar).
+    grid_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
 }
+
+/// Width kept free on the right for the scrollbar.
+const SCROLLBAR_W: f32 = 10.;
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
 
@@ -167,7 +176,7 @@ impl TerminalView {
         })
         .detach();
 
-        Self { term, notifier, size, focus: cx.focus_handle(), exited: false, started_at: Instant::now(), last_output: None, selecting: false }
+        Self { term, notifier, size, focus: cx.focus_handle(), exited: false, started_at: Instant::now(), last_output: None, selecting: false, scroll_rest: 0., scrollbar_drag: false, grid_bounds: Default::default() }
     }
 
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
@@ -280,7 +289,10 @@ impl TerminalView {
             ScrollDelta::Lines(p) => p.y,
             ScrollDelta::Pixels(p) => f32::from(p.y) / f32::from(self.size.cell_h),
         };
-        let n = lines.round() as i32;
+        // Add up small trackpad movements until they make whole lines.
+        let total = self.scroll_rest + lines;
+        let n = total.trunc() as i32;
+        self.scroll_rest = total - n as f32;
         if n == 0 {
             return;
         }
@@ -294,6 +306,69 @@ impl TerminalView {
             self.term.lock().scroll_display(Scroll::Delta(n));
         }
         cx.notify();
+    }
+
+    /// (lines of history above the screen, lines scrolled up, screen lines).
+    fn scroll_state(&self) -> (usize, usize, usize) {
+        let term = self.term.lock();
+        let grid = term.grid();
+        (grid.history_size(), grid.display_offset(), grid.screen_lines())
+    }
+
+    /// Scrolls so the scrollbar thumb is centered at window y.
+    fn scroll_to_y(&mut self, y: Pixels, cx: &mut Context<Self>) {
+        let b = self.grid_bounds.get();
+        let (history, offset, screen) = self.scroll_state();
+        if history == 0 || b.size.height <= px(0.) {
+            return;
+        }
+        let total = (history + screen) as f32;
+        let fraction = (f32::from(y - b.top()) / f32::from(b.size.height)).clamp(0., 1.);
+        // Top of the screen, in lines from the top of the history.
+        let top = (fraction * total - screen as f32 / 2.).clamp(0., history as f32);
+        let target_offset = history as i32 - top.round() as i32;
+        self.term.lock().scroll_display(Scroll::Delta(target_offset - offset as i32));
+        cx.notify();
+    }
+
+    /// VS Code-style scrollbar over the right edge: where the screen is in the history.
+    fn render_scrollbar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (history, offset, screen) = self.scroll_state();
+        if history == 0 {
+            return None;
+        }
+        let total = (history + screen) as f32;
+        let height = (screen as f32 / total).max(0.05);
+        let top = ((history - offset.min(history)) as f32 / total).min(1. - height);
+        let dragging = self.scrollbar_drag;
+        Some(
+            div()
+                .id("terminal-scrollbar")
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(px(SCROLLBAR_W))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.scrollbar_drag = true;
+                        this.scroll_to_y(ev.position.y, cx);
+                    }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(relative(top))
+                        .h(relative(height))
+                        .bg(gpui::rgba(if dragging { 0xbfbfbf66 } else { 0x79797966 }))
+                        .hover(|el| el.bg(gpui::rgba(0x646464b3))),
+                )
+                .into_any_element(),
+        )
     }
 }
 
@@ -447,6 +522,8 @@ impl Render for TerminalView {
         let cell_w = window.text_system().advance(font_id, font_size, 'm').map(|s| s.width).unwrap_or(px(7.2));
         let cell_h = px((size * LINE_HEIGHT).ceil());
         let bounds_cell = std::rc::Rc::new(std::cell::Cell::new(Bounds::default()));
+        let grid_bounds = self.grid_bounds.clone();
+        let scrollbar = self.render_scrollbar(cx);
         let bounds_for_mouse = bounds_cell.clone();
         let bounds_for_drag = bounds_cell.clone();
 
@@ -455,6 +532,7 @@ impl Render for TerminalView {
             .key_context("Terminal")
             .track_focus(&self.focus)
             .size_full()
+            .relative()
             .bg(rgb_hsla(BG))
             .cursor_text()
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| this.on_key(ev, cx)))
@@ -485,6 +563,14 @@ impl Render for TerminalView {
                 }),
             )
             .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                if this.scrollbar_drag {
+                    if ev.pressed_button == Some(MouseButton::Left) {
+                        this.scroll_to_y(ev.position.y, cx);
+                    } else {
+                        this.scrollbar_drag = false;
+                    }
+                    return;
+                }
                 if this.selecting && ev.pressed_button == Some(MouseButton::Left) {
                     let (point, side) = this.grid_point(ev.position, bounds_for_drag.get());
                     if let Some(sel) = this.term.lock().selection.as_mut() {
@@ -496,6 +582,7 @@ impl Render for TerminalView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                    this.scrollbar_drag = false;
                     this.selecting = false;
                     // A click without a drag leaves no selection.
                     let empty = this.term.lock().selection_to_string().is_none_or(|s| s.is_empty());
@@ -509,7 +596,8 @@ impl Render for TerminalView {
                 canvas(
                     move |bounds, _, cx| {
                         bounds_cell.set(bounds);
-                        let cols = ((bounds.size.width / cell_w).floor() as usize).max(2);
+                        grid_bounds.set(bounds);
+                        let cols = (((bounds.size.width - px(SCROLLBAR_W)) / cell_w).floor() as usize).max(2);
                         let rows = ((bounds.size.height / cell_h).floor() as usize).max(1);
                         this.update(cx, |this, _| this.resize(GridSize { cols, rows, cell_w, cell_h })).ok();
                     },
@@ -520,6 +608,7 @@ impl Render for TerminalView {
                 )
                 .size_full(),
             )
+            .children(scrollbar)
     }
 }
 
