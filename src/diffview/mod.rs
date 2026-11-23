@@ -1596,7 +1596,8 @@ fn render_unified_cell(
         ));
     }
     let gutters = if single_column {
-        [Some((DiffSide::Modified, modified)), None]
+        // One line-number column, for the side shown.
+        [Some((side, if side == DiffSide::Original { original } else { modified })), None]
     } else {
         [
             Some((DiffSide::Original, original)),

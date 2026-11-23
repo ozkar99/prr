@@ -16,6 +16,42 @@ It's a single native Rust binary with a GPU-rendered UI built on [GPUI](https://
 [GPUI Kit](https://github.com/longbridge/gpui-component). The Python and shell language servers
 run on Node.js and ship inside the app.
 
+## Install
+
+Requirements: macOS 11 or later (Apple Silicon or Intel), [Homebrew](https://brew.sh), and the
+Xcode Command Line Tools (`xcode-select --install`) for git and clangd.
+
+```sh
+brew tap ozkar99/prr https://github.com/ozkar99/prr
+brew trust --cask ozkar99/prr/prr   # Homebrew asks before using a third-party tap
+brew install --cask prr
+gh auth login                                       # once: the app uses gh's GitHub login
+```
+
+This puts **prr** in Applications and the `prr` command on your `PATH`, and
+installs the GitHub CLI (`gh`) and Node.js if you don't have them.
+
+Update with `brew upgrade --cask prr`. Uninstall with `brew uninstall --cask prr`
+(add `--zap` to also remove its checkouts and settings).
+
+### Language servers
+
+Syntax highlighting works without them; they add hover, navigation and references. Install the
+ones for the languages you review:
+
+| Language | Files | Server | Install |
+|---|---|---|---|
+| Go | `.go` | gopls | `brew install go`, then `go install golang.org/x/tools/gopls@latest` |
+| C/C++ | `.c` `.cc` `.cpp` `.h` `.hpp` … | clangd | comes with the Xcode Command Line Tools (Homebrew's `llvm` is used if installed) |
+| Python | `.py` `.pyi` | pyright | nothing: included |
+| Rust | `.rs` | rust-analyzer | `rustup component add rust-analyzer` |
+| Shell | `.sh` `.bash` `.zsh` `.ksh`, `.bashrc`, `.zshrc`, … | bash-language-server | nothing: included |
+| Starlark / Bazel | `BUILD` `.bazel` `.bzl` `WORKSPACE` `MODULE.bazel` | starpls | from [starpls releases](https://github.com/withered-magic/starpls/releases), on your `PATH` |
+
+The home screen checks for everything the app uses and shows the install command for anything
+missing. In a PR, each server's state shows in the header; hover a **not installed** or
+**failed** chip for details.
+
 ## Supported languages
 
 | Language | Files | Syntax colors | Code intelligence (hover, definition, references) |
@@ -28,7 +64,7 @@ run on Node.js and ship inside the app.
 | Starlark / Bazel | `BUILD` `WORKSPACE` `MODULE.bazel` `.bzl` `.bazel` `.star` | ✓ | ✓ starpls |
 
 Any other file shows as a plain diff, and you can still comment on it and review it as usual. Go,
-C/C++, Rust and Starlark need their server installed ([below](#language-servers)); the Python and
+C/C++, Rust and Starlark need their server installed ([see Language servers](#language-servers)); the Python and
 shell servers come with the app. You can add more languages yourself
 ([below](#adding-your-own-languages)).
 
@@ -72,42 +108,6 @@ env = { GOFLAGS = "-mod=mod" }
 
 Changes apply to PRs you open afterwards. Mistakes in the file show in the home screen's setup check.
 
-## Install
-
-Requirements: macOS 11 or later (Apple Silicon or Intel), [Homebrew](https://brew.sh), and the
-Xcode Command Line Tools (`xcode-select --install`) for git and clangd.
-
-```sh
-brew tap ozkar99/prr https://github.com/ozkar99/prr
-brew trust --cask ozkar99/prr/prr   # Homebrew asks before using a third-party tap
-brew install --cask prr
-gh auth login                                       # once: the app uses gh's GitHub login
-```
-
-This puts **prr** in Applications and the `prr` command on your `PATH`, and
-installs the GitHub CLI (`gh`) and Node.js if you don't have them.
-
-Update with `brew upgrade --cask prr`. Uninstall with `brew uninstall --cask prr`
-(add `--zap` to also remove its checkouts and settings).
-
-### Language servers
-
-Syntax highlighting works without them; they add hover, navigation and references. Install the
-ones for the languages you review:
-
-| Language | Files | Server | Install |
-|---|---|---|---|
-| Go | `.go` | gopls | `brew install go`, then `go install golang.org/x/tools/gopls@latest` |
-| C/C++ | `.c` `.cc` `.cpp` `.h` `.hpp` … | clangd | comes with the Xcode Command Line Tools (Homebrew's `llvm` is used if installed) |
-| Python | `.py` `.pyi` | pyright | nothing: included |
-| Rust | `.rs` | rust-analyzer | `rustup component add rust-analyzer` |
-| Shell | `.sh` `.bash` `.zsh` `.ksh`, `.bashrc`, `.zshrc`, … | bash-language-server | nothing: included |
-| Starlark / Bazel | `BUILD` `.bazel` `.bzl` `WORKSPACE` `MODULE.bazel` | starpls | from [starpls releases](https://github.com/withered-magic/starpls/releases), on your `PATH` |
-
-The home screen checks for everything the app uses and shows the install command for anything
-missing. In a PR, each server's state shows in the header; hover a **not installed** or
-**failed** chip for details.
-
 ## Opening PRs
 
 ```sh
@@ -147,7 +147,9 @@ shows their size with buttons to clear them. Your own clones are never touched b
 
 ## Reading the code
 
-- Files open as a side-by-side diff of the **whole file**, at the first change.
+- Files open as a side-by-side diff of the **whole file**, at the first change. New and deleted
+  files have nothing to compare, so they show as a single column (marked *new file* or *deleted in
+  this PR*).
 - **Hover** a symbol for its type and docs.
 - **⌘-click** or **F12**: go to definition. A file the PR changes opens as a diff; any other file
   opens read-only, marked *not changed in this PR*.

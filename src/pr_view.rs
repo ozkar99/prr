@@ -92,6 +92,13 @@ struct Hover {
     markdown: SharedString,
 }
 
+/// A file's contents as loaded: a patch to show side by side, or a whole file
+/// for one column (added, deleted, or not part of the PR).
+enum Loaded {
+    Patch(String),
+    Whole(String, DiffSide),
+}
+
 /// What the main column shows for the selected file.
 enum FileView {
     Loading,
@@ -176,6 +183,8 @@ pub struct PrView {
     sidebar_drag: Option<(Pixels, f32)>,
     split_ratio: f32,
     split_drag: bool,
+    /// The shown file is one column (added, deleted, or not in the PR): no split divider.
+    single_column: bool,
     /// Where the diff is drawn (for the split divider).
     code_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// What the reviewer last selected or clicked (for ⌘L / ⌘⇧L).
@@ -249,6 +258,7 @@ impl PrView {
             sidebar_drag: None,
             split_ratio: crate::settings::get(cx).split_ratio,
             split_drag: false,
+            single_column: false,
             code_bounds: Default::default(),
             last_selection: None,
             hovered_token: None,
@@ -463,40 +473,65 @@ impl PrView {
         cx.notify();
 
         let (root, base, head) = (self.checkout.root.clone(), self.checkout.merge_base.clone(), self.checkout.head_sha.clone());
-        let (patch_path, fut): (String, std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>>) = match &shown {
+        type Load = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Loaded, String>> + Send>>;
+        let (patch_path, fut): (String, Load) = match &shown {
             Shown::File(ix) => {
                 let Some(file) = self.pr.files.get(*ix).cloned() else { return };
                 let (path, previous) = (file.path.clone(), file.previous_path.clone());
-                (file.path.clone(), Box::pin(backend::task(async move { git::file_patch(&root, &base, &head, &path, previous.as_deref()).await })))
+                let fut: Load = match file.status.as_str() {
+                    // Nothing to compare: the whole file in one column.
+                    "added" => Box::pin(backend::task(async move {
+                        let text = tokio::fs::read_to_string(format!("{root}/{path}")).await.map_err(|e| e.to_string())?;
+                        Ok(Loaded::Whole(text, DiffSide::Modified))
+                    })),
+                    "removed" => Box::pin(backend::task(async move {
+                        let text = git::read_at_commit(&root, &base, &path).await?.ok_or("the file isn't in the base commit")?;
+                        Ok(Loaded::Whole(text, DiffSide::Original))
+                    })),
+                    _ => Box::pin(backend::task(async move { git::file_patch(&root, &base, &head, &path, previous.as_deref()).await.map(Loaded::Patch) })),
+                };
+                (file.path.clone(), fut)
             }
             Shown::Plain(abs) => {
                 let abs = abs.clone();
-                (abs.clone(), Box::pin(backend::task(async move { plain_patch(&abs).await })))
+                let path = abs.clone();
+                (abs, Box::pin(backend::task(async move {
+                    let text = tokio::fs::read_to_string(&path).await.map_err(|e| format!("{path}: {e}"))?;
+                    Ok(Loaded::Whole(text, DiffSide::Modified))
+                })))
             }
         };
-        let is_plain = matches!(shown, Shown::Plain(_));
         cx.spawn(async move |this, cx| {
-            let patch = fut.await;
+            let loaded = fut.await;
             this.update(cx, |this, cx| {
                 if this.load_seq != seq {
                     return;
                 }
+                let single = matches!(loaded, Ok(Loaded::Whole(..)));
+                this.single_column = single;
                 // Like Monaco's revealLineInCenterIfOutsideViewport: stay at the top when the
                 // first change is already on screen, otherwise put it about a third down.
-                let first = if is_plain { None } else { patch.as_ref().ok().and_then(|p| first_change(p, &patch_path)) }
+                let first = match &loaded {
+                    Ok(Loaded::Patch(p)) => first_change(p, &patch_path),
+                    _ => None,
+                }
                     .map(|pos| {
                         let line = pos.line();
                         let top = if line <= 30 { 1 } else { line - 12 };
                         DiffLinePosition::new(patch_path.clone(), pos.side(), top)
                     });
                 let target = line.map(|(side, n)| DiffLinePosition::new(patch_path.clone(), side, n)).or(first);
-                this.file_view = match patch.and_then(|p| DiffFile::parse(&p).map_err(|e| e.message().to_string())) {
+                let files = loaded.and_then(|l| match l {
+                    Loaded::Patch(p) => DiffFile::parse(&p).map_err(|e| e.message().to_string()),
+                    Loaded::Whole(text, side) => Ok(vec![DiffFile::whole(patch_path.clone(), &text, side)]),
+                });
+                this.file_view = match files {
                     Ok(files) if !files.is_empty() => {
                         let language = language::registry().grammar_for(&patch_path);
                         let files: Vec<DiffFile> = files.into_iter().map(|f| f.with_language(language)).collect();
                         let state = cx.new(|cx| {
                             let mut state = DiffState::new(files, cx)
-                                .with_mode(if is_plain { DiffMode::Unified } else { DiffMode::Split })
+                                .with_mode(if single { DiffMode::Unified } else { DiffMode::Split })
                                 .with_context_lines(None)
                                 .with_syntax_highlighter(highlight::highlight);
                             if let Some(pos) = target {
@@ -1587,6 +1622,14 @@ impl PrView {
                     )
                     .child(div().font_family(theme::MONO_FONT).text_size(theme::TEXT_SMALL).truncate().child(path))
                     .when(plain, |el| el.child(ui::muted("not changed in this PR")))
+                    .children(match &self.shown {
+                        Some(Shown::File(ix)) => match self.pr.files.get(*ix).map(|f| f.status.as_str()) {
+                            Some("added") => Some(ui::muted("new file")),
+                            Some("removed") => Some(ui::muted("deleted in this PR")),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
                     .child(div().flex_1())
                     .when(!outdated.is_empty(), |el| {
                         let n = outdated.len();
@@ -1620,7 +1663,7 @@ impl PrView {
                     let focus = self.focus.clone();
                     let bounds_cell = self.code_bounds.clone();
                     let ratio = self.split_ratio;
-                    let show_divider = !matches!(self.shown, Some(Shown::Plain(_)));
+                    let show_divider = !self.single_column;
                     let dragging_split = self.split_drag;
                     div()
                         .id("code")
@@ -2190,24 +2233,6 @@ impl Render for PrView {
     }
 }
 
-/// A plain file as a patch with no changes, so the diff view shows it as one
-/// unchanged column (go-to-definition into files the PR didn't touch).
-async fn plain_patch(abs: &str) -> Result<String, String> {
-    let text = tokio::fs::read_to_string(abs).await.map_err(|e| format!("{abs}: {e}"))?;
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() {
-        return Ok(String::new());
-    }
-    let n = lines.len();
-    // No `diff --git` header and no a/ b/ prefixes: the parser keeps the absolute path as is.
-    let mut out = format!("--- {abs}\n+++ {abs}\n@@ -1,{n} +1,{n} @@\n");
-    for line in lines {
-        out.push(' ');
-        out.push_str(line);
-        out.push('\n');
-    }
-    Ok(out)
-}
 
 #[cfg(test)]
 mod tests {
@@ -2220,11 +2245,13 @@ mod tests {
         assert!(matches!(&parts[1], super::HoverPart::Text(t) if t.starts_with("Getenv retrieves") && t.contains("pkg.go.dev")));
     }
 
-    #[tokio::test]
-    async fn plain_patch_keeps_absolute_path() {
-        let abs = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
-        let patch = super::plain_patch(abs).await.unwrap();
-        let files = crate::diffview::DiffFile::parse(&patch).unwrap();
-        assert_eq!(files[0].path().as_ref(), abs);
+    #[test]
+    fn whole_files_are_one_column_on_their_side() {
+        use crate::diffview::{DiffFile, DiffSide};
+        let new = DiffFile::whole("/abs/a.go", "package a\n\nfunc A() {}\n", DiffSide::Modified);
+        assert_eq!(new.path().as_ref(), "/abs/a.go");
+        assert_eq!((new.lines(DiffSide::Modified).len(), new.lines(DiffSide::Original).len()), (3, 0));
+        let old = DiffFile::whole("gone.go", "a\nb\n", DiffSide::Original);
+        assert_eq!((old.lines(DiffSide::Original).len(), old.lines(DiffSide::Modified).len()), (2, 0));
     }
 }

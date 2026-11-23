@@ -63,7 +63,8 @@ pub fn start(cx: &mut App, open_pr: impl Fn(String, &mut Window, &mut App) + 'st
         while let Some((cmd, reply)) = rx.next().await {
             let open_pr = open_pr.clone();
             let result = cx.update(|cx| {
-                let Some(handle) = cx.windows().into_iter().next() else { return json!({ "error": "no window" }) };
+                // The active window (the one in front), else the first.
+                let Some(handle) = cx.active_window().or_else(|| cx.windows().into_iter().next()) else { return json!({ "error": "no window" }) };
                 handle
                     .update(cx, |_, window, cx| run(&cmd, window, cx, &*open_pr))
                     .unwrap_or_else(|e| json!({ "error": e.to_string() }))

@@ -1455,10 +1455,12 @@ impl DiffState {
             if file.pairs().is_empty() {
                 rows.push(DisplayRow::Notice(ix));
             } else if file.status() == DiffFileStatus::Unchanged {
+                // One column, on whichever side holds the text (see DiffFile::whole).
+                let old_side = file.lines(DiffSide::Modified).is_empty() && !file.lines(DiffSide::Original).is_empty();
                 rows.extend((0..file.pairs().len()).map(|line| DisplayRow::Code {
                     file: ix,
-                    original: None,
-                    modified: Some(line),
+                    original: old_side.then_some(line),
+                    modified: (!old_side).then_some(line),
                     changed: false,
                 }));
             } else if file.status() == DiffFileStatus::Conflicted {
