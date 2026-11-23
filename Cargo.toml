@@ -5,7 +5,7 @@ edition = "2024"
 description = "Review GitHub pull requests with real code intelligence (native Rust UI)"
 
 [[bin]]
-name = "purr"
+name = "prr"
 path = "src/main.rs"
 
 [dependencies]

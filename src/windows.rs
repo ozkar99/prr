@@ -1,4 +1,4 @@
-//! One window per PR. `purr <PR>` (and the home screen's Open) bring an
+//! One window per PR. `prr <PR>` (and the home screen's Open) bring an
 //! already-open PR's window forward, reuse a window that's on the home screen,
 //! or open a new window.
 use crate::app::AppView;
@@ -56,7 +56,7 @@ pub fn open(pr: Option<PRRef>, cx: &mut App) -> Option<WindowHandle<Root>> {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Review Tool".into()),
+                    title: Some("prr".into()),
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(16.), px(13.))),
                 }),

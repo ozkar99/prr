@@ -7,7 +7,7 @@ pub struct PRRef {
     pub owner: String,
     pub repo: String,
     pub number: u64,
-    /// The user's clone of the repo, when `purr` was run inside one.
+    /// The user's clone of the repo, when `prr` was run inside one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_repo: Option<String>,
     /// Review in a copy-on-write worktree of that clone instead of the clone

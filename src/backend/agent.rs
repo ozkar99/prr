@@ -61,7 +61,7 @@ pub fn info() -> AgentInfo {
 
 fn instructions(pr_label: &str, merge_base: &str) -> String {
     format!(
-        "You are running inside Review Tool, a desktop app for reviewing GitHub pull requests. \
+        "You are running inside prr, a desktop app for reviewing GitHub pull requests. \
          The working directory is a checkout of {pr_label} at the PR's head commit; the PR's changes are the diff against merge-base {merge_base}. \
          The user is reviewing this PR, not editing it: you have read-only access (reading and searching files, and the review-tool tools); you can't run commands or change files. \
          When the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\"), call the review-tool get_selection tool first \
@@ -156,7 +156,7 @@ pub fn launch(pr_label: &str, merge_base: &str, root: &str, session: &mcp::Sessi
     Ok(Launch { program: claude.to_string_lossy().into(), args, env })
 }
 
-/// `purr --mcp-stdio <url> <token>`: a stdio MCP server that forwards
+/// `prr --mcp-stdio <url> <token>`: a stdio MCP server that forwards
 /// each newline-delimited JSON-RPC message to the app's HTTP MCP endpoint.
 pub fn run_stdio_bridge(url: &str, token: &str) {
     use std::io::{BufRead, Read};
@@ -171,7 +171,7 @@ pub fn run_stdio_bridge(url: &str, token: &str) {
             continue;
         }
         let Ok(mut stream) = TcpStream::connect(host) else {
-            eprintln!("purr: can't reach the app at {url} (is it still running?)");
+            eprintln!("prr: can't reach the app at {url} (is it still running?)");
             break;
         };
         let request = format!(

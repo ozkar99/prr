@@ -23,7 +23,7 @@ mod ui;
 use gpui::*;
 use gpui_component::Root;
 
-/// `--open-pr=<url>` (and `--local-repo=<path>`), as passed by the `purr` command.
+/// `--open-pr=<url>` (and `--local-repo=<path>`), as passed by the `prr` command.
 fn launch_pr() -> Option<backend::types::PRRef> {
     let args: Vec<String> = std::env::args().collect();
     let mut pr = args.iter().find_map(|a| a.strip_prefix("--open-pr=").and_then(backend::types::parse_pr_ref))?;
@@ -31,7 +31,7 @@ fn launch_pr() -> Option<backend::types::PRRef> {
     Some(pr)
 }
 
-/// When launched from inside a Claude Code session (e.g. `purr` typed in its
+/// When launched from inside a Claude Code session (e.g. `prr` typed in its
 /// terminal), drop that session's markers so the agent panel starts its own,
 /// independent session. User settings like CLAUDE_CODE_USE_BEDROCK are kept.
 fn forget_parent_agent_session() {
@@ -60,14 +60,14 @@ fn set_up_menus(cx: &mut App) {
         KeyBinding::new("alt-cmd-h", HideOthers, None),
     ]);
     cx.set_menus([
-        Menu::new("Review Tool").items([
+        Menu::new("prr").items([
         MenuItem::action("Settings…", settings::OpenSettings),
         MenuItem::separator(),
-        MenuItem::action("Hide Review Tool", Hide),
+        MenuItem::action("Hide prr", Hide),
         MenuItem::action("Hide Others", HideOthers),
         MenuItem::action("Show All", ShowAll),
         MenuItem::separator(),
-        MenuItem::action("Quit Review Tool", Quit),
+        MenuItem::action("Quit prr", Quit),
         ]),
         Menu::new("File").items([
             MenuItem::action("New Window", windows::NewWindow),
@@ -82,7 +82,7 @@ fn set_up_menus(cx: &mut App) {
 }
 
 fn main() {
-    // `purr --mcp-stdio <url> <token>`: the stdio MCP bridge agents start (no UI).
+    // `prr --mcp-stdio <url> <token>`: the stdio MCP bridge agents start (no UI).
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--mcp-stdio") {
         if let (Some(url), Some(token)) = (args.get(2), args.get(3)) {
@@ -90,7 +90,7 @@ fn main() {
         }
         return;
     }
-    // `purr [PR]` typed in a terminal: hand the PR to the app and return.
+    // `prr [PR]` typed in a terminal: hand the PR to the app and return.
     if cli::handle(&args) {
         return;
     }
@@ -121,7 +121,7 @@ fn main() {
             cx.defer(move |cx| windows::route(instance::Request { open_pr: Some(url), local_repo: None }, cx));
         });
 
-        // Later launches (another `purr …`, or opening the app again) land here.
+        // Later launches (another `prr …`, or opening the app again) land here.
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<instance::Request>();
         instance::listen(move |request| {
             let _ = tx.unbounded_send(request);

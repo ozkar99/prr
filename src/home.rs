@@ -282,7 +282,7 @@ impl Home {
                 el.child(
                     card()
                         .border_color(hsla(theme::DEL))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child("Review Tool needs a couple of things first"))
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child("prr needs a couple of things first"))
                         .child(tool_list(required))
                         .child(
                             ui::primary_button("check-again", if checking { "Checking…" } else { "Check again" })
@@ -543,7 +543,7 @@ impl Home {
                         .flex_wrap()
                         .gap(px(4.))
                         .child("Checkouts not opened for 14 days are removed automatically. Run")
-                        .child(ui::code("purr"))
+                        .child(ui::code("prr"))
                         .child("inside your own clone of a repo to review its PRs there, with no extra copy."),
                 )
                 .into_any_element(),

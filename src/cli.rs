@@ -1,12 +1,12 @@
-//! `purr [PR]` from a terminal: resolve the PR, hand it to the app
+//! `prr [PR]` from a terminal: resolve the PR, hand it to the app
 //! (starting it if needed), and give the terminal back. The installed app's
 //! binary is the command, so nothing else needs installing.
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-const USAGE: &str = "Usage: purr [PR]
+const USAGE: &str = "Usage: prr [PR]
 
-Opens a GitHub pull request in Review Tool.
+Opens a GitHub pull request in prr.
 
 PR can be:
   https://github.com/owner/repo/pull/123   a PR URL
@@ -19,7 +19,7 @@ Options:
   -v, --version    show the version";
 
 fn fail(message: &str) -> ! {
-    eprintln!("purr: {message}");
+    eprintln!("prr: {message}");
     std::process::exit(1)
 }
 
@@ -72,7 +72,7 @@ fn app_bundle() -> Option<PathBuf> {
 pub fn handle(args: &[String]) -> bool {
     let user_args: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     if user_args.iter().any(|a| *a == "-v" || *a == "--version") {
-        println!("purr {}", env!("CARGO_PKG_VERSION"));
+        println!("prr {}", env!("CARGO_PKG_VERSION"));
         return true;
     }
     // Internal launch (macOS or this command passing --open-pr).
@@ -101,7 +101,7 @@ pub fn handle(args: &[String]) -> bool {
     match (&url, &local) {
         (Some(u), Some(path)) => println!("Opening {u} in your clone at {path}"),
         (Some(u), None) => println!("Opening {u}"),
-        _ => println!("Opening Review Tool"),
+        _ => println!("Opening prr"),
     }
 
     let launched = match app_bundle() {

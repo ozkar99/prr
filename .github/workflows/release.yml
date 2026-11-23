@@ -28,7 +28,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
 
-      - name: Build Review Tool.app and DMG
+      - name: Build prr.app and DMG
         run: scripts/bundle-macos.sh universal
 
       # Signing and notarization run only when the Apple secrets are configured
@@ -54,15 +54,15 @@ jobs:
           security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
           security list-keychains -d user -s "$keychain"
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$keychain"
-          app="dist/Review Tool.app"
+          app="dist/prr.app"
           codesign --force --deep --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app"
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          dmg="dist/Review.Tool_${version}_universal.dmg"
+          dmg="dist/prr_${version}_universal.dmg"
           rm -f "$dmg"
           stage=$(mktemp -d)
           cp -R "$app" "$stage/"
           ln -s /Applications "$stage/Applications"
-          hdiutil create -quiet -volname "Review Tool" -srcfolder "$stage" -ov -format UDZO "$dmg"
+          hdiutil create -quiet -volname "prr" -srcfolder "$stage" -ov -format UDZO "$dmg"
           codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
           xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
           xcrun stapler staple "$dmg"
@@ -73,7 +73,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.dmg \
-            --title "Review Tool $GITHUB_REF_NAME" \
+            --title "prr $GITHUB_REF_NAME" \
             --notes "Install or upgrade with Homebrew: see the README."
 
       - name: Upload build (manual runs)

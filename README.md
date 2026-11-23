@@ -1,13 +1,13 @@
-# review-tool
+# prr
 
-A macOS app for reviewing GitHub pull requests with real code intelligence. It checks out the
-PR, runs each language's own server against it (gopls, clangd, pyright, starpls,
-bash-language-server), and shows a side-by-side diff of the whole file: hover for types and
-docs, go to definition, peek, find references. Comments, replies and reviews go straight to
+prr (pronounced "purr") is a macOS app for reviewing GitHub pull requests with real code
+intelligence. It checks out the PR, runs each language's own server against it (gopls, clangd,
+pyright, starpls, bash-language-server), and shows a side-by-side diff of the whole file: hover
+for types and docs, go to definition, peek, find references. Comments, replies and reviews go straight to
 GitHub, and a coding agent (Claude Code by default) sits in a panel below the code, ready to
 answer questions about what you've selected.
 
-![Review Tool reviewing a Go PR: side-by-side diff with hover type info from gopls, and Claude Code answering a question about the selected lines in the bottom panel](docs/screenshots/review-tool.png)
+![prr reviewing a Go PR: side-by-side diff with hover type info from gopls, and Claude Code answering a question about the selected lines in the bottom panel](docs/screenshots/review-tool.png)
 
 *Reviewing a Go PR: the diff with hover docs from gopls (top), and Claude Code explaining the
 selected lines (bottom, ⌘L).*
@@ -22,16 +22,16 @@ Requirements: macOS 11 or later (Apple Silicon or Intel), [Homebrew](https://bre
 Xcode Command Line Tools (`xcode-select --install`) for git and clangd.
 
 ```sh
-brew tap ozkar99/review-tool https://github.com/ozkar99/review-tool
-brew trust --cask ozkar99/review-tool/review-tool   # Homebrew asks before using a third-party tap
-brew install --cask review-tool
+brew tap ozkar99/prr https://github.com/ozkar99/prr
+brew trust --cask ozkar99/prr/prr   # Homebrew asks before using a third-party tap
+brew install --cask prr
 gh auth login                                       # once: the app uses gh's GitHub login
 ```
 
-This puts **Review Tool** in Applications and the `purr` command on your `PATH`, and
+This puts **prr** in Applications and the `prr` command on your `PATH`, and
 installs the GitHub CLI (`gh`) and Node.js if you don't have them.
 
-Update with `brew upgrade --cask review-tool`. Uninstall with `brew uninstall --cask review-tool`
+Update with `brew upgrade --cask prr`. Uninstall with `brew uninstall --cask prr`
 (add `--zap` to also remove its checkouts and settings).
 
 ### Language servers
@@ -54,11 +54,11 @@ missing. In a PR, each server's state shows in the header; hover a **not install
 ## Opening PRs
 
 ```sh
-purr https://github.com/owner/repo/pull/123   # a PR URL
-purr owner/repo#123                           # a PR reference
-purr 123                                      # inside a clone: PR #123 of that repo
-purr                                          # inside a clone: the PR for your current branch
-purr --version                                # the installed version (-v); --help for usage
+prr https://github.com/owner/repo/pull/123   # a PR URL
+prr owner/repo#123                           # a PR reference
+prr 123                                      # inside a clone: PR #123 of that repo
+prr                                          # inside a clone: the PR for your current branch
+prr --version                                # the installed version (-v); --help for usage
 ```
 
 Or open the app and pick a PR from **Review requested** / **Your pull requests**, or paste a URL
@@ -71,7 +71,7 @@ opens a new window, **⌘`** switches windows, and the app quits with its last w
 
 ### Where the code comes from
 
-- **Inside your own clone of the PR's repo**, `purr` reviews the PR right there: no second
+- **Inside your own clone of the PR's repo**, `prr` reviews the PR right there: no second
   copy, and your language-server caches are reused. The PR's commits are fetched into your clone
   without adding branches or refs. If the clone isn't already at the PR, the app asks before
   switching it and switches it back when you close the PR. It never switches a clone with
@@ -169,7 +169,7 @@ The app gives the agent an MCP server, one per window, so an agent only sees its
 Claude Code in the panel is **read-only**: it can read and search the checkout and use these tools,
 but it has no shell, no editing tools and no web access, so it can't change files or send code
 anywhere. The PR can't configure it either: the repo's `.mcp.json` and `.claude/settings.json`
-(hooks, permissions) are ignored. It also runs as its own session when you start `purr`
+(hooks, permissions) are ignored. It also runs as its own session when you start `prr`
 from inside Claude Code.
 
 ### Using another agent
@@ -205,7 +205,7 @@ your confirmation in the app, whatever the agent.
 
 ## Settings
 
-**⌘,** (also **Review Tool → Settings…**, **Settings** on the home screen, or **⚙** in a PR):
+**⌘,** (also **prr → Settings…**, **Settings** on the home screen, or **⚙** in a PR):
 
 - **Agent command**: empty for Claude Code, or another agent's command.
 - **Editor font size** and **terminal font size**, applied right away.
@@ -248,15 +248,15 @@ PR code is untrusted, so the app never builds or runs it:
 Needs Rust ([rustup](https://rustup.rs)), and Node.js for the Python and shell language servers.
 
 ```sh
-git clone git@github.com:ozkar99/review-tool.git
-cd review-tool
+git clone git@github.com:ozkar99/prr.git
+cd prr
 npm install --prefix target/language-servers pyright@1.1.414 bash-language-server@5.8.1   # once
 cargo run -- --open-pr=https://github.com/owner/repo/pull/123
 ```
 
 The first build takes a few minutes. Xcode isn't needed: shaders compile when the app starts.
 
-`scripts/bundle-macos.sh` builds `dist/Review Tool.app`, a DMG, and `dist/purr` (a link to
+`scripts/bundle-macos.sh` builds `dist/prr.app`, a DMG, and `dist/prr` (a link to
 the app's binary, which is also the command); add `universal` for an Apple Silicon + Intel build,
 as releases use.
 
@@ -268,12 +268,12 @@ start one with `REVIEW_TOOL_DEBUG_PORT=<port>` and POST JSON commands to
 ### Releasing
 
 1. Bump `version` in `Cargo.toml`; commit and push.
-2. Tag it: `git tag -a vX.Y.Z -m "Review Tool vX.Y.Z" && git push origin vX.Y.Z`. CI
+2. Tag it: `git tag -a vX.Y.Z -m "prr vX.Y.Z" && git push origin vX.Y.Z`. CI
    (`.github/workflows/release.yml`) builds the universal app and publishes the DMG as a GitHub
    Release. (**Actions → Release → Run workflow** builds without releasing.)
-3. In `Casks/review-tool.rb`, set `version`, and `sha256` to the DMG's checksum
+3. In `Casks/prr.rb`, set `version`, and `sha256` to the DMG's checksum
    (`curl -sL <dmg url> | shasum -a 256`); commit and push. Users get it with
-   `brew upgrade --cask review-tool`.
+   `brew upgrade --cask prr`.
 
 The app is ad-hoc signed, and the cask clears macOS's download quarantine. To sign and notarize
 with an Apple Developer ID instead, add these repository secrets (Settings → Secrets and
@@ -292,7 +292,7 @@ variables → Actions); the workflow uses them when present:
 
 | Piece | Where |
 |---|---|
-| `purr` command, single instance, windows | `src/cli.rs`, `src/instance.rs`, `src/windows.rs`, `src/main.rs` |
+| `prr` command, single instance, windows | `src/cli.rs`, `src/instance.rs`, `src/windows.rs`, `src/main.rs` |
 | Home screen, setup check, storage | `src/home.rs`, `src/backend/deps.rs`, `src/backend/cleanup.rs` |
 | GitHub: review queue, PRs, threads, comments, reviews | `src/backend/github.rs` |
 | Checkouts: your clone, its copy-on-write worktrees, the app's own clones | `src/backend/git.rs` |
@@ -303,4 +303,4 @@ variables → Actions); the workflow uses them when present:
 | Review threads, comment box, conversation, finish-review panel | `src/review.rs` |
 | Agent panel: terminal, agent launch, MCP server | `src/terminal.rs`, `src/backend/agent.rs`, `src/backend/mcp.rs` |
 | Settings | `src/settings.rs` |
-| Homebrew cask (this repo is also the tap) | `Casks/review-tool.rb` |
+| Homebrew cask (this repo is also the tap) | `Casks/prr.rb` |

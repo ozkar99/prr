@@ -216,7 +216,7 @@ fn rpc(msg: &Value, token: &str) -> Option<Value> {
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "review-tool", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tools for the Review Tool app the user is reviewing this pull request in. Call get_selection whenever the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\"). You can also act on the review for the user (comment, reply, resolve threads, submit the review); each action is shown to the user in the app and only happens if they confirm it there, so call the tool when asked instead of asking for confirmation in chat."
+            "instructions": "Tools for the prr app the user is reviewing this pull request in. Call get_selection whenever the user refers to code they're looking at (\"this\", \"here\", \"the selection\", \"this function\"). You can also act on the review for the user (comment, reply, resolve threads, submit the review); each action is shown to the user in the app and only happens if they confirm it there, so call the tool when asked instead of asking for confirmation in chat."
         }),
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tools() }),
