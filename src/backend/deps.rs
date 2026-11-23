@@ -69,9 +69,14 @@ pub async fn check() -> Vec<ToolStatus> {
 /// Whether gh is installed and logged in, and that GitHub takes its token.
 async fn github_status() -> ToolStatus {
     let mut status = ToolStatus { name: "gh".into(), purpose: "GitHub access (prr uses its login)".into(), required: true, ok: false, problem: None, fix: None };
-    if which("gh").is_none() {
-        status.problem = Some("not installed".into());
-        status.fix = Some(auth::HOW_TO_FIX.into());
+    let program = auth::gh_program();
+    if program != "gh" {
+        status.name = program.rsplit('/').next().unwrap_or(&program).to_string();
+        status.purpose = "GitHub access (the gh command from Settings)".into();
+    }
+    if let Err(e) = auth::check_gh().await {
+        status.problem = Some(if program == "gh" && e.contains("isn't installed") { "not installed".into() } else { e });
+        status.fix = (program == "gh").then(|| auth::HOW_TO_FIX.into());
         return status;
     }
     if let Err(e) = auth::token().await {

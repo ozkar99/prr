@@ -60,6 +60,9 @@ fn current_branch_pr() -> Option<String> {
         }
         None => (Some(owner.clone()), git(&["symbolic-ref", "--short", "-q", "HEAD"])),
     };
+    let settings = crate::settings::load();
+    crate::backend::auth::set_account(&settings.github_account);
+    crate::backend::auth::set_gh_command(&settings.gh_command);
     crate::backend::block_on(crate::backend::github::pr_for_branch(&owner, &repo, head_owner.as_deref(), branch.as_deref(), sha.as_deref())).ok().flatten()
 }
 
