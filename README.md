@@ -150,6 +150,8 @@ shows their size with buttons to clear them. Your own clones are never touched b
 - Files open as a side-by-side diff of the **whole file**, at the first change. New and deleted
   files have nothing to compare, so they show as a single column (marked *new file* or *deleted in
   this PR*).
+- **⌘F** finds text in the open file (the new side of a diff): matches are highlighted, **Enter** /
+  **⇧Enter** (or ↓ / ↑) move between them, **Esc** closes.
 - **Hover** a symbol for its type and docs.
 - **⌘-click** or **F12**: go to definition. A file the PR changes opens as a diff; any other file
   opens read-only, marked *not changed in this PR*.

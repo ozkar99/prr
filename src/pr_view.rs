@@ -6,7 +6,7 @@ use crate::theme::{self, hsla};
 use crate::ui;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use crate::diffview::{CodeSelection, Diff, DiffChangeIndicator, DiffEvent, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState, TokenHit};
+use crate::diffview::{find_matches, CodeSelection, Diff, DiffSearch, DiffChangeIndicator, DiffEvent, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState, TokenHit};
 use crate::backend::mcp;
 use crate::language::{self, Language, ServerStatus};
 use crate::lsp::{self, LspClient};
@@ -17,19 +17,22 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use serde_json::{Value, json};
+use gpui_component::Sizable as _;
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::text::TextView;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-actions!(review_tool, [GoBack, GoToDefinition, PeekDefinition, FindReferences, ClosePopup, ToggleAgent, AskAgent, ExplainAgent, AddComment]);
+actions!(review_tool, [FindInFile, GoBack, GoToDefinition, PeekDefinition, FindReferences, ClosePopup, ToggleAgent, AskAgent, ExplainAgent, AddComment]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         // Inside the agent's terminal these keys go to the agent (as in the web version).
         KeyBinding::new("ctrl--", GoBack, Some("PrView && !Terminal")),
         KeyBinding::new("cmd-j", ToggleAgent, Some("PrView")),
+        KeyBinding::new("cmd-f", FindInFile, Some("PrView && !Terminal")),
         KeyBinding::new("cmd-l", AskAgent, Some("PrView && !Terminal")),
         KeyBinding::new("cmd-shift-l", ExplainAgent, Some("PrView && !Terminal")),
         KeyBinding::new("cmd-alt-c", AddComment, Some("PrView && !Terminal")),
@@ -97,6 +100,18 @@ struct Hover {
 enum Loaded {
     Patch(String),
     Whole(String, DiffSide),
+}
+
+/// The ⌘F box: its input and the matches in the shown file.
+struct SearchBar {
+    input: Entity<InputState>,
+    /// (side, 1-based line, byte offset in the displayed line), in file order.
+    matches: Vec<(DiffSide, usize, usize)>,
+    current: usize,
+    /// The query the matches are for (a "change" that leaves the text alone, like
+    /// Enter, keeps the current match).
+    query: String,
+    _sub: Subscription,
 }
 
 /// What the main column shows for the selected file.
@@ -185,6 +200,8 @@ pub struct PrView {
     split_drag: bool,
     /// The shown file is one column (added, deleted, or not in the PR): no split divider.
     single_column: bool,
+    /// The ⌘F box, while open.
+    search: Option<SearchBar>,
     /// Where the diff is drawn (for the split divider).
     code_bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// What the reviewer last selected or clicked (for ⌘L / ⌘⇧L).
@@ -259,6 +276,7 @@ impl PrView {
             split_ratio: crate::settings::get(cx).split_ratio,
             split_drag: false,
             single_column: false,
+            search: None,
             code_bounds: Default::default(),
             last_selection: None,
             hovered_token: None,
@@ -551,6 +569,8 @@ impl PrView {
                     Ok(_) => FileView::Message("No textual changes to show for this file.".into()),
                     Err(e) => FileView::Message(format!("Couldn't load the file: {e}")),
                 };
+                // An open ⌘F box searches the newly shown file.
+                this.update_search(true, cx);
                 cx.notify();
             })
             .ok();
@@ -882,6 +902,148 @@ impl PrView {
                 )
                 .into_any_element(),
         )
+    }
+
+    // ---- ⌘F: find in the open file ----
+
+    fn open_search(&mut self, _: &FindInFile, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.file_view, FileView::Diff(_)) {
+            return;
+        }
+        let input = match &self.search {
+            Some(search) => search.input.clone(),
+            None => {
+                let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find"));
+                let sub = cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, _, cx| match ev {
+                    InputEvent::Change => this.update_search(false, cx),
+                    InputEvent::PressEnter { shift, .. } => this.step_search(if *shift { -1 } else { 1 }, cx),
+                    _ => {}
+                });
+                self.search = Some(SearchBar { input: input.clone(), matches: Vec::new(), current: 0, query: String::new(), _sub: sub });
+                input
+            }
+        };
+        input.update(cx, |i, cx| i.focus(window, cx));
+        window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+        self.update_search(true, cx);
+    }
+
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// The side searched: the new side, or the old one for a deleted file.
+    fn search_side(&self, cx: &App) -> DiffSide {
+        match &self.file_view {
+            FileView::Diff(state) => {
+                let file = state.read(cx).files().first();
+                match file {
+                    Some(f) if f.lines(DiffSide::Modified).is_empty() => DiffSide::Original,
+                    _ => DiffSide::Modified,
+                }
+            }
+            _ => DiffSide::Modified,
+        }
+    }
+
+    /// Recomputes matches when the query changed, or always with `force` (a new file).
+    fn update_search(&mut self, force: bool, cx: &mut Context<Self>) {
+        let side = self.search_side(cx);
+        let Some(search) = self.search.as_ref() else { return };
+        let query = search.input.read(cx).value().to_string();
+        if !force && query == search.query {
+            return;
+        }
+        let mut matches = Vec::new();
+        if let FileView::Diff(state) = &self.file_view
+            && let Some(file) = state.read(cx).files().first()
+            && !query.is_empty()
+        {
+            for line in file.lines(side) {
+                for range in find_matches(line.display(), &query) {
+                    matches.push((side, line.line_number(), range.start));
+                }
+            }
+        }
+        let search = self.search.as_mut().unwrap();
+        search.matches = matches;
+        search.current = 0;
+        search.query = query;
+        self.reveal_search(cx);
+        cx.notify();
+    }
+
+    fn step_search(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let Some(search) = self.search.as_mut() else { return };
+        let n = search.matches.len() as i32;
+        if n == 0 {
+            return;
+        }
+        search.current = ((search.current as i32 + delta).rem_euclid(n)) as usize;
+        self.reveal_search(cx);
+        cx.notify();
+    }
+
+    /// Scrolls the current match into view, a few lines from the top.
+    fn reveal_search(&mut self, cx: &mut Context<Self>) {
+        let Some(&(side, line, _)) = self.search.as_ref().and_then(|s| s.matches.get(s.current)) else { return };
+        let Some(shown) = self.shown.clone() else { return };
+        if let FileView::Diff(state) = &self.file_view {
+            let path = self.diff_path(&shown);
+            state.update(cx, |s, cx| s.scroll_to_line(DiffLinePosition::new(path, side, line.saturating_sub(5).max(1)), cx));
+        }
+    }
+
+    fn diff_search(&self, cx: &App) -> Option<DiffSearch> {
+        let search = self.search.as_ref()?;
+        Some(DiffSearch {
+            query: search.input.read(cx).value(),
+            side: Some(self.search_side(cx)),
+            current: search.matches.get(search.current).copied(),
+        })
+    }
+
+    /// The find box, top right of the code (VS Code's find widget).
+    fn render_search_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let search = self.search.as_ref()?;
+        let query_empty = search.input.read(cx).value().is_empty();
+        let count = match (search.matches.len(), query_empty) {
+            (_, true) => String::new(),
+            (0, false) => "No results".to_string(),
+            (n, false) => format!("{} of {n}", search.current + 1),
+        };
+        let has = !search.matches.is_empty();
+        // Deferred: drawn over the code.
+        Some(deferred(
+            div()
+                .id("find")
+                .absolute()
+                .top(px(4.))
+                .right(px(18.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(6.))
+                .py(px(4.))
+                .bg(hsla(theme::PANEL))
+                .border_1()
+                .border_color(hsla(theme::BORDER))
+                .rounded(px(4.))
+                .shadow_md()
+                .text_size(theme::TEXT_SMALL)
+                .occlude()
+                // Esc in the box: the input passes its Escape action up to here.
+                .on_action(cx.listener(|this, _: &gpui_component::input::Escape, window, cx| this.close_search(window, cx)))
+                .child(div().w(px(220.)).child(Input::new(&search.input).small()))
+                .child(div().min_w(px(64.)).text_color(hsla(if has || query_empty { theme::MUTED } else { theme::DEL })).child(count))
+                .child(ui::link_enabled("find-prev", "↑", has).when(has, |el| el.on_click(cx.listener(|this, _, _, cx| this.step_search(-1, cx)))))
+                .child(ui::link_enabled("find-next", "↓", has).when(has, |el| el.on_click(cx.listener(|this, _, _, cx| this.step_search(1, cx)))))
+                .child(ui::link("find-close", "✕").on_click(cx.listener(|this, _, window, cx| this.close_search(window, cx)))),
+        )
+        .with_priority(1)
+        .into_any_element())
     }
 
     // ---- The agent acting on the review (always confirmed by the user) ----
@@ -1665,12 +1827,15 @@ impl PrView {
                     let ratio = self.split_ratio;
                     let show_divider = !self.single_column;
                     let dragging_split = self.split_drag;
+                    let diff_search = self.diff_search(cx);
+                    let search_bar = self.render_search_bar(cx);
                     div()
                         .id("code")
                         .relative()
                         .flex_1()
                         .min_h_0()
                         .child(canvas(move |bounds, _, _| bounds_cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
+                        .children(search_bar)
                         // The divider between the old and new sides: drag to resize.
                         .when(show_divider, |el| {
                             el.child(
@@ -1732,6 +1897,7 @@ impl PrView {
                             .hunk_separator(DiffHunkSeparator::Simple)
                             .change_indicator(DiffChangeIndicator::Signs)
                             .split_ratio(ratio)
+                            .search(diff_search)
                             .annotations(annotations)
                             .render_annotation(move |annotation, _, _| {
                                 let key = annotation.id().to_string();
@@ -2113,6 +2279,7 @@ impl Render for PrView {
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::on_go_to_definition))
             .on_action(cx.listener(Self::on_find_references))
+            .on_action(cx.listener(Self::open_search))
             .on_action(cx.listener(Self::on_peek_definition))
             // While a peek is open: ↑/↓ choose a result, Enter opens it.
             .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
