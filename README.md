@@ -198,8 +198,9 @@ the code's right-click menu:
 | **Agent: About this code** | ⌘L | Types `About <file> lines A-B: ` into the agent; you finish the question. |
 
 Lines from the left side of a diff are marked as the old version. If the agent is still
-starting, the text is typed once it's ready. It's never typed into a question the agent is asking
-(such as Claude Code's "trust this folder?" for a new checkout); answer that yourself first.
+starting, the text is typed once it's ready. It's never typed into a question the agent is asking;
+answer that yourself first. Claude Code asks "trust this folder?" once per repository; to skip it,
+turn on **Trust PR checkouts in Claude Code** in Settings.
 
 The panel is a full terminal: **⌘C** / **⌘V** copy and paste, **⌘K** clears, scroll for history,
 **⌘-click** opens a link. Drag the divider to resize. **Restart** appears if the agent exits.
@@ -267,6 +268,8 @@ your confirmation in the app, whatever the agent.
 **⌘,** (also **prr → Settings…**, **Settings** on the home screen, or **⚙** in a PR):
 
 - **Agent command**: empty for Claude Code, or another agent's command.
+- **Trust PR checkouts in Claude Code** (off by default): skips Claude Code's "trust this folder?"
+  for the agent panel by marking the PR's repository as trusted in `~/.claude.json`.
 - **Editor font size** and **terminal font size**, applied right away.
 
 The sidebar's width, the diff's split and the agent panel's height are remembered too. Everything is saved in
