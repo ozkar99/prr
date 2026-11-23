@@ -246,20 +246,7 @@ impl Home {
                     .when_some(t.problem.clone().filter(|_| !t.ok), |el, p| {
                         el.child(div().text_color(hsla(theme::WARN)).text_size(theme::TEXT_SMALL).child(p))
                     })
-                    .when_some(t.fix.clone(), |el, fix| {
-                        el.child(
-                            div()
-                                .font_family(theme::MONO_FONT)
-                                .text_size(theme::TEXT_SMALL)
-                                .bg(hsla(theme::BG))
-                                .border_1()
-                                .border_color(hsla(theme::BORDER))
-                                .rounded(px(4.))
-                                .px(px(6.))
-                                .py(px(1.))
-                                .child(fix),
-                        )
-                    })
+                    .when_some(t.fix.clone(), |el, fix| el.child(ui::copy_command(SharedString::from(format!("fix-{}", t.name)), fix)))
             }))
         };
         let card = || {
@@ -399,7 +386,7 @@ impl Home {
         };
         let items = match queue {
             Ok(items) => items.clone(),
-            Err(e) => return col.child(ui::error_text(format!("Couldn't load pull requests: {e}"))),
+            Err(e) => return col.child(ui::copy_error("queue-error", format!("Couldn't load pull requests: {e}"))),
         };
         for (label, reason) in [("Review requested", "review-requested"), ("Your pull requests", "authored")] {
             let group: Vec<PRSummary> = items.iter().filter(|p| p.reason == reason).cloned().collect();
@@ -603,7 +590,7 @@ impl Render for Home {
                                     ),
                             )
                             .when_some(self.busy.clone(), |el, b| el.child(ui::muted(b).my(px(8.))))
-                            .when_some(self.error.clone(), |el, e| el.child(ui::error_text(e).my(px(8.))))
+                            .when_some(self.error.clone(), |el, e| el.child(div().my(px(8.)).child(ui::copy_error("open-error", e))))
                             .when_some(self.notice.clone(), |el, n| el.child(ui::muted(n).my(px(8.))))
                             .children(self.render_switch(cx))
                             .child(

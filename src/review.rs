@@ -218,7 +218,7 @@ impl Render for Composer {
                 }
             }))
             .child(Textarea::new(&self.input).disabled(busy))
-            .children(self.error.clone().map(ui::error_text))
+            .children(self.error.clone().map(|e| ui::copy_error("review-error", e)))
             .child(
                 div()
                     .flex()
@@ -445,7 +445,7 @@ impl Render for ThreadView {
                         .child(markdown_body(SharedString::from(format!("md-{}", c.id)), &c.body, cx)),
                 );
             }
-            body = body.children(self.error.clone().map(|e| div().px(px(10.)).child(ui::error_text(e))));
+            body = body.children(self.error.clone().map(|e| div().px(px(10.)).child(ui::copy_error("review-panel-error", e))));
             body = body.child(match &self.reply {
                 Some(composer) => div().px(px(10.)).pt(px(8.)).pb(px(10.)).child(composer.clone()).into_any_element(),
                 None => div()
@@ -732,7 +732,7 @@ impl Render for Conversation {
                     }),
             );
         if let Some(e) = error {
-            col = col.child(ui::error_text(format!("Couldn't load the conversation: {e}")));
+            col = col.child(ui::copy_error("conversation-error", format!("Couldn't load the conversation: {e}")));
         }
         if loading && state.is_none() {
             col = col.child(ui::muted("Loading…"));

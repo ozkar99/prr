@@ -153,3 +153,76 @@ pub fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
+
+/// Text with a small "Copy" link after it, which puts the text on the
+/// clipboard and says "Copied" for a moment: for install commands and errors.
+#[derive(IntoElement)]
+pub struct Copyable {
+    id: ElementId,
+    text: SharedString,
+    command: bool,
+}
+
+/// A command to run (monospace pill), copyable.
+pub fn copy_command(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Copyable {
+    Copyable { id: id.into(), text: text.into(), command: true }
+}
+
+/// An error message (red), copyable.
+pub fn copy_error(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Copyable {
+    Copyable { id: id.into(), text: text.into(), command: false }
+}
+
+impl RenderOnce for Copyable {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let copied = window.use_keyed_state(self.id.clone(), cx, |_, _| false);
+        let is_copied = *copied.read(cx);
+        let text = self.text.clone();
+        let body = if self.command {
+            div()
+                .font_family(theme::MONO_FONT)
+                .text_size(theme::TEXT_SMALL)
+                .bg(hsla(theme::BG))
+                .border_1()
+                .border_color(hsla(theme::BORDER))
+                .rounded(px(4.))
+                .px(px(6.))
+                .py(px(1.))
+                .child(self.text)
+        } else {
+            div().text_color(hsla(theme::DEL)).child(self.text)
+        };
+        div()
+            .flex()
+            .items_baseline()
+            .gap(px(8.))
+            .min_w_0()
+            .child(body.min_w_0())
+            .child(
+                div()
+                    .id(self.id)
+                    .flex_shrink_0()
+                    .text_size(theme::TEXT_SMALL)
+                    .text_color(hsla(if is_copied { theme::ADD } else { theme::LINK }))
+                    .cursor_pointer()
+                    .whitespace_nowrap()
+                    .child(if is_copied { "Copied ✓" } else { "Copy" })
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+                        copied.update(cx, |c, cx| {
+                            *c = true;
+                            cx.notify();
+                            cx.spawn(async move |this, cx| {
+                                cx.background_executor().timer(std::time::Duration::from_millis(1500)).await;
+                                this.update(cx, |c, cx| {
+                                    *c = false;
+                                    cx.notify();
+                                })
+                                .ok();
+                            })
+                            .detach();
+                        });
+                    }),
+            )
+    }
+}
