@@ -52,31 +52,48 @@ clones use the same token over HTTPS, so SSH keys aren't needed.
 
 #### Token permissions
 
-A [fine-grained token](https://github.com/settings/personal-access-tokens/new) (recommended):
+**Fine-grained token (recommended).** It only grants what prr needs:
 
-| Setting | Value | What prr uses it for |
+| Permission | Access | What prr uses it for |
 |---|---|---|
-| Resource owner | the organization (or account) whose PRs you review | A fine-grained token covers one owner; make one per organization if you need more. |
-| Repository access | the repositories you review, or all of them | |
 | **Contents** | Read-only | Cloning and fetching the PR's code |
 | **Pull requests** | Read and write | Reading PRs, files, reviews and threads; posting comments, replies and reviews, resolving threads. Read-only is enough to browse, but posting then fails. |
 | **Metadata** | Read-only | Added automatically |
 
 Nothing else is needed: no Administration, Actions, Workflows, Issues or account permissions.
 
-A [classic token](https://github.com/settings/tokens/new) works too: tick `repo`, or only
-`public_repo` if you just review public repositories. It's broader than prr needs (`repo` also
-allows pushing code), so prefer a fine-grained one.
+To create one:
 
-With either kind:
+1. If your organization uses SAML single sign-on, sign in to it through your identity provider
+   first (open any of its repositories on github.com), so your GitHub account is linked to it.
+2. Open [Settings → Developer settings → Personal access tokens → Fine-grained tokens](https://github.com/settings/personal-access-tokens)
+   and click **Generate new token**.
+3. **Token name**: `prr`. **Expiration**: whatever you like (your organization may cap it).
+4. **Resource owner**: the organization whose PRs you review. A token covers one owner; make one
+   per organization if you need more. If the organization isn't listed, it blocks fine-grained
+   tokens: use a classic token (below) instead.
+5. **Repository access**: **All repositories**, or **Only select repositories** and pick the ones
+   you review.
+6. Under **Permissions → Repository permissions**, set **Contents** to *Read-only* and
+   **Pull requests** to *Read and write*. Leave everything else at *No access*.
+7. If the organization requires approval, a box appears to say why you need the token; something
+   like "Reviewing pull requests in prr" will do.
+8. Click **Generate token** and copy it (GitHub shows it only once).
+9. In prr, open **Settings (⌘,) → GitHub token**, paste it and click **Save**. The home screen
+   checks it right away and shows "signed in as @you, using the token saved in Settings".
 
-- **SAML single sign-on:** after creating the token, choose **Configure SSO → Authorize** next to
-  your organization on the tokens page, or GitHub answers as if the repositories didn't exist.
-- **Organization approval:** some organizations have to approve fine-grained tokens before they
-  work. The token shows as pending until an owner approves it.
-- **Review queue:** the home screen's "Review requested" and "Your pull requests" lists only
-  include repositories the token can see, so a fine-grained token limited to one organization
-  shows only that organization's PRs.
+Fine-grained tokens are authorized for single sign-on as they're created, so there's no separate
+SSO step. If the organization requires approval, the token shows as *pending* and can only read
+public repositories until an owner approves it (organization owners are approved automatically).
+
+**Classic token.** It works too: [create one](https://github.com/settings/tokens/new) with the
+`repo` scope, or only `public_repo` if you just review public repositories. It's broader than prr
+needs (`repo` also allows pushing code). With SAML single sign-on, a classic token needs one more
+step after creating it: on the tokens page, click **Configure SSO → Authorize** next to your
+organization, or GitHub answers as if its repositories didn't exist.
+
+The home screen's "Review requested" and "Your pull requests" lists only include repositories the
+token can see, so a fine-grained token for one organization shows only that organization's PRs.
 
 ### Language servers
 
