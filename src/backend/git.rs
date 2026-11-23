@@ -16,16 +16,16 @@ pub fn bare_repo_path(owner: &str, repo: &str) -> PathBuf {
 }
 
 async fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
-    run("git", args, cwd, &[("GIT_TERMINAL_PROMPT", "0")]).await
+    // With the GitHub token, for anything that downloads (see auth::git_env).
+    let mut env: Vec<(String, String)> = vec![("GIT_TERMINAL_PROMPT".into(), "0".into())];
+    env.extend(crate::backend::auth::git_env().await);
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    run("git", args, cwd, &env).await
 }
 
+/// Clones are over HTTPS, authenticated with the same token as the API.
 async fn remote_url(owner: &str, repo: &str) -> String {
-    let protocol = run("gh", &["config", "get", "git_protocol"], None, &[]).await.unwrap_or_default();
-    if protocol.trim() == "ssh" {
-        format!("git@github.com:{owner}/{repo}.git")
-    } else {
-        format!("https://github.com/{owner}/{repo}.git")
-    }
+    format!("https://github.com/{owner}/{repo}.git")
 }
 
 fn valid_sha(sha: &str) -> Result<(), String> {

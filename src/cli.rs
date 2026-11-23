@@ -23,15 +23,49 @@ fn fail(message: &str) -> ! {
     std::process::exit(1)
 }
 
-/// Runs gh in the current directory; trimmed stdout, or None on failure.
-fn gh(args: &[&str]) -> Option<String> {
-    let out = Command::new("gh").args(args).stderr(Stdio::null()).output().ok()?;
+/// Runs git in the current directory; trimmed stdout, or None on failure.
+fn git(args: &[&str]) -> Option<String> {
+    let out = Command::new("git").args(args).stderr(Stdio::null()).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// "owner/repo" from a GitHub remote URL (https, ssh, or scp-style).
+fn github_repo(url: &str) -> Option<(String, String)> {
+    let re = regex::Regex::new(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$").unwrap();
+    let c = re.captures(url.trim())?;
+    Some((c[1].to_string(), c[2].to_string()))
+}
+
+/// The GitHub repo of the current directory's clone: its `upstream` remote
+/// (a fork's original), else `origin`, else any GitHub remote.
+fn current_repo() -> Option<(String, String)> {
+    for remote in ["upstream", "origin"] {
+        if let Some(r) = git(&["remote", "get-url", remote]).as_deref().and_then(github_repo) {
+            return Some(r);
+        }
+    }
+    git(&["remote"])?.lines().find_map(|r| git(&["remote", "get-url", r]).as_deref().and_then(github_repo))
+}
+
+/// The open PR for the current branch, if any.
+fn current_branch_pr() -> Option<String> {
+    let (owner, repo) = current_repo()?;
+    let sha = git(&["rev-parse", "HEAD"]);
+    // The branch as pushed: its upstream's remote (owner) and name.
+    let (head_owner, branch) = match git(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) {
+        Some(up) => {
+            let (remote, branch) = up.split_once('/')?;
+            let owner = git(&["remote", "get-url", remote]).as_deref().and_then(github_repo).map(|(o, _)| o);
+            (owner, Some(branch.to_string()))
+        }
+        None => (Some(owner.clone()), git(&["symbolic-ref", "--short", "-q", "HEAD"])),
+    };
+    crate::backend::block_on(crate::backend::github::pr_for_branch(&owner, &repo, head_owner.as_deref(), branch.as_deref(), sha.as_deref())).ok().flatten()
 }
 
 fn resolve_pr(arg: Option<&str>) -> Option<String> {
     let Some(arg) = arg else {
-        return gh(&["pr", "view", "--json", "url", "--jq", ".url"]); // current branch, if it has a PR
+        return current_branch_pr();
     };
     if regex::Regex::new(r"github\.com/[^/]+/[^/]+/pull/\d+").unwrap().is_match(arg) {
         return Some(arg.to_string());
@@ -40,24 +74,22 @@ fn resolve_pr(arg: Option<&str>) -> Option<String> {
         return Some(format!("https://github.com/{}/{}/pull/{}", r.owner, r.repo, r.number));
     }
     if let Some(num) = arg.strip_prefix('#').unwrap_or(arg).parse::<u64>().ok() {
-        let repo = gh(&["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])
-            .unwrap_or_else(|| fail(&format!("\"{arg}\" is a PR number, but the current directory isn't a GitHub repository clone")));
-        return Some(format!("https://github.com/{repo}/pull/{num}"));
+        let (owner, repo) = current_repo().unwrap_or_else(|| fail(&format!("\"{arg}\" is a PR number, but the current directory isn't a clone of a GitHub repository")));
+        return Some(format!("https://github.com/{owner}/{repo}/pull/{num}"));
     }
     fail(&format!("don't understand \"{arg}\" (expected a PR URL, owner/repo#123, or a number)"))
 }
 
-/// When the current directory is inside a clone of the PR's repo, its top-level
-/// path: the app then reviews the PR in that clone instead of its own checkout.
+/// When the current directory is inside a clone of the PR's repo (any of its
+/// remotes points there), its top-level path: the app then reviews the PR in
+/// that clone instead of its own checkout.
 fn local_clone_for(pr_url: &str) -> Option<String> {
     let pr = crate::backend::types::parse_pr_ref(pr_url)?;
-    let top = Command::new("git").args(["rev-parse", "--show-toplevel"]).stderr(Stdio::null()).output().ok()?;
-    if !top.status.success() {
-        return None;
-    }
-    let repo = gh(&["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])?;
-    repo.eq_ignore_ascii_case(&format!("{}/{}", pr.owner, pr.repo))
-        .then(|| String::from_utf8_lossy(&top.stdout).trim().to_string())
+    let top = git(&["rev-parse", "--show-toplevel"])?;
+    let matches = git(&["remote"])?.lines().any(|r| {
+        git(&["remote", "get-url", r]).as_deref().and_then(github_repo).is_some_and(|(o, n)| o.eq_ignore_ascii_case(&pr.owner) && n.eq_ignore_ascii_case(&pr.repo))
+    });
+    matches.then_some(top)
 }
 
 /// The .app bundle this binary is in, if any (Contents/MacOS/<binary>).
@@ -126,4 +158,19 @@ pub fn handle(args: &[String]) -> bool {
         fail("couldn't start the app");
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::github_repo;
+
+    #[test]
+    fn reads_github_remotes() {
+        let want = Some(("ozkar99".to_string(), "prr".to_string()));
+        assert_eq!(github_repo("https://github.com/ozkar99/prr.git"), want);
+        assert_eq!(github_repo("https://github.com/ozkar99/prr"), want);
+        assert_eq!(github_repo("git@github.com:ozkar99/prr.git"), want);
+        assert_eq!(github_repo("ssh://git@github.com/ozkar99/prr.git"), want);
+        assert_eq!(github_repo("https://gitlab.com/ozkar99/prr.git"), None);
+    }
 }

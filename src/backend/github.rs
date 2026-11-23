@@ -1,5 +1,5 @@
 //! GitHub API: REST for PR data, GraphQL for reviews (the only API with pending reviews and threads).
-use crate::backend::exec::run;
+use crate::backend::auth;
 use crate::backend::types::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -7,17 +7,14 @@ use tokio::sync::{Mutex, OnceCell};
 
 static CLIENT: OnceCell<reqwest::Client> = OnceCell::const_new();
 
-/// Reuses the token from the GitHub CLI so there is no separate login.
 async fn client() -> Result<&'static reqwest::Client, String> {
     CLIENT
         .get_or_try_init(|| async {
-            let token = run("gh", &["auth", "token"], None, &[]).await?.trim().to_string();
             let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert("Authorization", format!("Bearer {token}").parse().map_err(|_| "bad token")?);
             headers.insert("Accept", "application/vnd.github+json".parse().unwrap());
             headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
             reqwest::Client::builder()
-                .user_agent("review-tool")
+                .user_agent("prr")
                 .default_headers(headers)
                 .build()
                 .map_err(|e| e.to_string())
@@ -25,13 +22,20 @@ async fn client() -> Result<&'static reqwest::Client, String> {
         .await
 }
 
+/// Sends a request with the current token (see `auth`). A rejected token is
+/// forgotten, so the next request looks for one again.
+async fn send(req: reqwest::RequestBuilder) -> Result<reqwest::Response, String> {
+    let token = auth::token().await?;
+    let res = req.bearer_auth(&token.value).send().await.map_err(|e| e.to_string())?;
+    if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+        auth::forget().await;
+        return Err(format!("GitHub rejected the token from {}. Add a working one in {}.", token.source.describe(), auth::HOW_TO_FIX));
+    }
+    Ok(res)
+}
+
 async fn rest(path: &str) -> Result<Value, String> {
-    let res = client()
-        .await?
-        .get(format!("https://api.github.com{path}"))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let res = send(client().await?.get(format!("https://api.github.com{path}"))).await?;
     let status = res.status();
     let body: Value = res.json().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
@@ -41,19 +45,45 @@ async fn rest(path: &str) -> Result<Value, String> {
 }
 
 async fn graphql(query: &str, variables: Value) -> Result<Value, String> {
-    let res = client()
-        .await?
-        .post("https://api.github.com/graphql")
-        .json(&json!({ "query": query, "variables": variables }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let res = send(client().await?.post("https://api.github.com/graphql").json(&json!({ "query": query, "variables": variables }))).await?;
     let body: Value = res.json().await.map_err(|e| e.to_string())?;
     if let Some(errors) = body["errors"].as_array().filter(|e| !e.is_empty()) {
         let msgs: Vec<&str> = errors.iter().filter_map(|e| e["message"].as_str()).collect();
         return Err(msgs.join("; "));
     }
     Ok(body["data"].clone())
+}
+
+/// The signed-in account's login, for the setup check.
+pub async fn viewer() -> Result<String, String> {
+    Ok(s(&rest("/user").await?["login"]))
+}
+
+/// The open PR whose head is `head_owner:branch` in `owner/repo`, or else one
+/// that contains commit `sha`: what `prr` with no argument opens.
+pub async fn pr_for_branch(owner: &str, repo: &str, head_owner: Option<&str>, branch: Option<&str>, sha: Option<&str>) -> Result<Option<String>, String> {
+    if let (Some(head_owner), Some(branch)) = (head_owner, branch) {
+        let prs = rest(&format!("/repos/{owner}/{repo}/pulls?state=open&head={head_owner}:{}", urlencode(branch))).await?;
+        if let Some(url) = prs.as_array().and_then(|a| a.first()).and_then(|p| p["html_url"].as_str()) {
+            return Ok(Some(url.to_string()));
+        }
+    }
+    if let Some(sha) = sha {
+        let prs = rest(&format!("/repos/{owner}/{repo}/commits/{sha}/pulls")).await.unwrap_or(Value::Null);
+        if let Some(url) = prs.as_array().into_iter().flatten().find(|p| p["state"] == "open").and_then(|p| p["html_url"].as_str()) {
+            return Ok(Some(url.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 fn s(v: &Value) -> String {
