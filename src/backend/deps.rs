@@ -53,25 +53,19 @@ pub async fn check() -> Vec<ToolStatus> {
         None => tool("claude", "agent panel (Claude Code)", false, has("claude"), "curl -fsSL https://claude.ai/install.sh | bash"),
     };
 
-    vec![
-        tool("git", "checking out PRs", true, has("git"), "xcode-select --install"),
-        gh,
-        tool("gopls", "Go: types and navigation", false, has("gopls"), "brew install go && go install golang.org/x/tools/gopls@latest"),
-        tool(
-            "clangd",
-            "C/C++: types and navigation",
-            false,
-            has("clangd") || std::path::Path::new("/opt/homebrew/opt/llvm/bin/clangd").exists(),
-            "xcode-select --install",
-        ),
-        tool("node", "Python and shell scripts: types and navigation (runs pyright, bash-language-server)", false, has("node"), "brew install node"),
-        tool(
-            "starpls",
-            "Starlark/Bazel: types and navigation",
-            false,
-            has("starpls"),
-            "download from https://github.com/withered-magic/starpls/releases and put it on your PATH",
-        ),
-        agent_status,
-    ]
+    let mut tools = vec![tool("git", "checking out PRs", true, has("git"), "xcode-select --install"), gh];
+    // Each language's server (built-in or from languages.toml), once per tool.
+    let registry = crate::language::registry();
+    for lang in registry.all() {
+        if let Some(r) = lang.requirement()
+            && !tools.iter().any(|t| t.name == r.name)
+        {
+            tools.push(tool(&r.name, &r.purpose, false, r.installed, &r.fix));
+        }
+    }
+    for e in &registry.config_errors {
+        tools.push(ToolStatus { name: "languages.toml".into(), purpose: "your language settings".into(), required: false, ok: false, problem: Some(e.clone()), fix: None });
+    }
+    tools.push(agent_status);
+    tools
 }

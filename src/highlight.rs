@@ -226,24 +226,6 @@ fn lang(name: &str) -> Option<&'static Lang> {
     }
 }
 
-/// The language name we use for a path (and that [`highlight`] understands).
-pub fn language_for(path: &str) -> &'static str {
-    let file = path.rsplit('/').next().unwrap_or(path);
-    let ext = file.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
-    match ext {
-        "go" => "go",
-        "c" | "h" => "cpp", // headers are usually C++ in mixed repos; the C++ grammar parses C fine
-        "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" | "ipp" | "inl" | "m" | "mm" => "cpp",
-        "py" | "pyi" => "python",
-        "bzl" | "star" | "bazel" | "sky" => "starlark",
-        "sh" | "bash" | "zsh" | "ksh" => "bash",
-        _ => match file {
-            "BUILD" | "WORKSPACE" | "WORKSPACE.bzlmod" | "MODULE.bazel" => "starlark",
-            ".bashrc" | ".bash_profile" | ".zshrc" | ".profile" | "bashrc" | "zshrc" | "profile" => "bash",
-            _ => "text",
-        },
-    }
-}
 
 fn style(hex: u32) -> HighlightStyle {
     HighlightStyle { color: Some(Hsla::from(rgb(hex))), ..Default::default() }

@@ -30,6 +30,46 @@ Any other file shows as a plain diff, and you can still comment on it and review
 C/C++ and Starlark need their server installed ([below](#language-servers)); the Python and shell
 servers come with the app.
 
+### Adding your own languages
+
+Each language is a plug-in behind one interface: which files it handles, how to run its language
+server, and how its status shows in the header. Add languages, or adjust the built-in ones, in
+`~/Library/Application Support/review-tool/languages.toml`:
+
+```toml
+# A new language: hover, go to definition and references from its server.
+[[language]]
+name = "Rust"
+extensions = ["rs"]
+command = "rust-analyzer"
+
+[[language]]
+name = "TypeScript"
+extensions = ["ts", "tsx"]
+command = "typescript-language-server"
+args = ["--stdio"]
+language_id = "typescript"
+install = "npm install -g typescript-language-server typescript"
+
+# Adjust a built-in (go, cpp, python, shell, starlark): only what you set changes.
+[[language]]
+id = "go"
+command = "/opt/tools/gopls"
+env = { GOFLAGS = "-mod=mod" }
+```
+
+| Key | Meaning |
+|---|---|
+| `name`, `id` | Display name and identifier (defaults to the name in lowercase). A built-in's `id` adjusts it. |
+| `extensions`, `filenames` | Which files it handles (`["rs"]`, `["Justfile"]`). |
+| `command`, `args`, `env` | The language server to run, in the PR's checkout. |
+| `language_id` | The LSP language id (defaults to the `id`). |
+| `initialization_options` | Sent to the server when it starts. |
+| `grammar` | Borrow a built-in grammar for syntax colors: `go`, `c`, `cpp`, `python` or `bash`. Without one, added languages show without colors. |
+| `install` | Shown in the header and the setup check when the server isn't installed. |
+
+Changes apply to PRs you open afterwards. Mistakes in the file show in the home screen's setup check.
+
 ## Install
 
 Requirements: macOS 11 or later (Apple Silicon or Intel), [Homebrew](https://brew.sh), and the

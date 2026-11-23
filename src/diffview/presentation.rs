@@ -317,7 +317,7 @@ fn push_run(runs: &mut Vec<Range<u32>>, range: Range<usize>, text: &str, unit: D
 /// determines the language; dots in a directory are not extensions.
 /// Language for a path, using the app's own mapping (src/highlight.rs).
 pub(crate) fn detected_language(path: &str) -> SharedString {
-    crate::highlight::language_for(path).into()
+    crate::language::registry().grammar_for(path).into()
 }
 
 #[cfg(test)]
@@ -332,11 +332,11 @@ mod tests {
 
     #[test]
     fn language_detection_uses_filename() {
-        // The app's own mapping (src/highlight.rs), not GPUI Kit's.
+        // The app's languages (src/language) pick the grammar, not GPUI Kit's table.
         for (name, language) in [
             ("cmd/main.go", "go"),
             ("src/lib.hpp", "cpp"),
-            ("tools/BUILD", "starlark"),
+            ("tools/BUILD", "python"), // Starlark is colored with the Python grammar
             ("scripts/run.sh", "bash"),
             ("directory.go/README", "text"),
             ("go", "text"),

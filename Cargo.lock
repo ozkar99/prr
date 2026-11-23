@@ -5094,6 +5094,7 @@ dependencies = [
  "similar",
  "smallvec",
  "tokio",
+ "toml 0.8.23",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",

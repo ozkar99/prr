@@ -10,6 +10,7 @@ mod devdriver;
 mod diffview;
 mod highlight;
 mod home;
+mod language;
 mod lsp;
 mod markdown;
 mod pr_view;
