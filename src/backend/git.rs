@@ -1,6 +1,6 @@
 //! Getting a PR's code onto disk, two ways:
 //!
-//! - **The user's own clone** (when `review-tool-purr` runs inside a clone of the
+//! - **The user's own clone** (when `purr` runs inside a clone of the
 //!   PR's repo): the PR's commits are fetched into it without creating refs,
 //!   and it's switched to the PR head only with the user's OK. No extra clone,
 //!   and its language-server caches are reused. Big repos stay cheap.

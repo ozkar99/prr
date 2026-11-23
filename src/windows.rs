@@ -1,4 +1,4 @@
-//! One window per PR. `review-tool-purr <PR>` (and the home screen's Open) bring an
+//! One window per PR. `purr <PR>` (and the home screen's Open) bring an
 //! already-open PR's window forward, reuse a window that's on the home screen,
 //! or open a new window.
 use crate::app::AppView;

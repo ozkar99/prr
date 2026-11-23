@@ -543,7 +543,7 @@ impl Home {
                         .flex_wrap()
                         .gap(px(4.))
                         .child("Checkouts not opened for 14 days are removed automatically. Run")
-                        .child(ui::code("review-tool-purr"))
+                        .child(ui::code("purr"))
                         .child("inside your own clone of a repo to review its PRs there, with no extra copy."),
                 )
                 .into_any_element(),

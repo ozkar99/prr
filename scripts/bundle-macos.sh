@@ -22,21 +22,21 @@ if [ "${1:-}" = universal ]; then
   cargo build --release --target aarch64-apple-darwin
   cargo build --release --target x86_64-apple-darwin
   mkdir -p target/universal
-  lipo -create -output target/universal/review-tool-purr \
-    target/aarch64-apple-darwin/release/review-tool-purr \
-    target/x86_64-apple-darwin/release/review-tool-purr
-  BIN=target/universal/review-tool-purr
+  lipo -create -output target/universal/purr \
+    target/aarch64-apple-darwin/release/purr \
+    target/x86_64-apple-darwin/release/purr
+  BIN=target/universal/purr
   ARCH=universal
 else
   cargo build --release
-  BIN=target/release/review-tool-purr
+  BIN=target/release/purr
   ARCH=$(uname -m | sed 's/arm64/aarch64/')
 fi
 
 APP="dist/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/review-tool-purr"
+cp "$BIN" "$APP/Contents/MacOS/purr"
 cp assets/icon.icns "$APP/Contents/Resources/icon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -46,7 +46,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>$NAME</string>
   <key>CFBundleIdentifier</key><string>$ID</string>
-  <key>CFBundleExecutable</key><string>review-tool-purr</string>
+  <key>CFBundleExecutable</key><string>purr</string>
   <key>CFBundleIconFile</key><string>icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -67,10 +67,10 @@ echo "bundled pyright $PYRIGHT, bash-language-server $BASH_LS"
 
 codesign --force --deep --sign - "$APP"
 
-# The app's binary is also the `review-tool-purr` command; a symlink keeps it inside the
+# The app's binary is also the `purr` command; a symlink keeps it inside the
 # bundle (it finds its language servers and the app through its real location).
 rm -f dist/review-tool
-ln -sf "$NAME.app/Contents/MacOS/review-tool-purr" dist/review-tool-purr
+ln -sf "$NAME.app/Contents/MacOS/purr" dist/purr
 
 # The DMG name matches what GitHub serves for "Review Tool_…" uploads (the cask's URL).
 DMG="dist/Review.Tool_${VERSION}_${ARCH}.dmg"
@@ -80,4 +80,4 @@ ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -quiet -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 rm -rf "$STAGE"
-echo "built $APP, $DMG and dist/review-tool-purr (the command)"
+echo "built $APP, $DMG and dist/purr (the command)"
