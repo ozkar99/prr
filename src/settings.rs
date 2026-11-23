@@ -305,7 +305,7 @@ impl Render for SettingsView {
                                     .when(self.token_saved, |el| el.child(ui::link("token-remove", "Remove saved token").on_click(cx.listener(|this, _, _, cx| this.remove_token(cx))))),
                             )
                             .children(self.token_error.clone().map(|e| div().text_size(theme::TEXT_SMALL).text_color(hsla(theme::DEL)).child(e)))
-                            .child(ui::muted("Without one, prr uses $GH_TOKEN or $GITHUB_TOKEN, the GitHub CLI's login, or git's saved credentials for https://github.com, in that order. A personal access token needs read access to the repositories (and write access to post reviews); for an organization with SAML single sign-on, authorize it for the organization.").text_size(theme::TEXT_SMALL)),
+                            .child(ui::muted("Without one, prr uses git's saved credentials for https://github.com, $GH_TOKEN or $GITHUB_TOKEN, or the GitHub CLI's login, in that order, skipping any GitHub rejects. A personal access token needs read access to the repositories (and write access to post reviews); for an organization with SAML single sign-on, authorize it for the organization.").text_size(theme::TEXT_SMALL)),
                     ))
                     .child(row(
                         "Agent command",

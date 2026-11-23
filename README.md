@@ -32,13 +32,16 @@ installs Node.js if you don't have it.
 
 ### GitHub access
 
-prr has no login of its own. It uses the first GitHub token it finds:
+prr has no login of its own. It uses the first GitHub token it finds, skipping any that GitHub
+rejects:
 
-1. one saved in **Settings → GitHub token** (kept in your macOS Keychain),
-2. the `GH_TOKEN` or `GITHUB_TOKEN` environment variable (only when you start prr from a terminal),
-3. the [GitHub CLI](https://cli.github.com)'s login, if `gh` is installed,
-4. git's saved credentials for `https://github.com`, such as the token macOS Keychain stored the
-   last time you pushed over HTTPS.
+1. one you saved in **Settings → GitHub token** (kept in your macOS Keychain); there's none unless
+   you add it,
+2. git's saved credentials for `https://github.com`, such as the token macOS Keychain or Git
+   Credential Manager stored the last time you pushed over HTTPS. If your organization uses SAML
+   single sign-on, this token is already authorized for it,
+3. the `GH_TOKEN` or `GITHUB_TOKEN` environment variable (only when you start prr from a terminal),
+4. the [GitHub CLI](https://cli.github.com)'s login, if `gh` is installed.
 
 If none of these work for you, create a
 [personal access token](https://github.com/settings/personal-access-tokens) with read access to the

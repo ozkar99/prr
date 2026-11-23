@@ -36,9 +36,9 @@ cask "prr" do
   ]
 
   caveats <<~EOS
-    prr finds a GitHub token by itself (gh's login, $GH_TOKEN, or git's
-    credentials for https://github.com). Without one, add a token in
-    prr → Settings (⌘,).
+    prr finds a GitHub token by itself (git's credentials for
+    https://github.com, $GH_TOKEN, or gh's login). Without one, add a
+    token in prr → Settings (⌘,).
     Open a PR with:
       prr owner/repo#123
   EOS

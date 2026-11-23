@@ -1,11 +1,13 @@
 //! Where the GitHub token comes from. prr has no login of its own; it uses the
-//! first token it finds:
+//! first token it finds that GitHub hasn't rejected:
 //!
-//! 1. one saved in Settings (kept in the macOS Keychain),
-//! 2. the `GH_TOKEN` or `GITHUB_TOKEN` environment variable,
-//! 3. the GitHub CLI's login (`gh auth token`), when gh is installed,
-//! 4. git's own credentials for https://github.com (`git credential fill`),
-//!    e.g. the token osxkeychain saved the last time you pushed over HTTPS.
+//! 1. one saved in Settings (kept in the macOS Keychain), only if you saved one,
+//! 2. git's own credentials for https://github.com (`git credential fill`),
+//!    e.g. the token osxkeychain or Git Credential Manager saved when you last
+//!    pushed over HTTPS. It's already approved for your organizations' single
+//!    sign-on, so it's the first thing tried,
+//! 3. the `GH_TOKEN` or `GITHUB_TOKEN` environment variable,
+//! 4. the GitHub CLI's login (`gh auth token`), when gh is installed.
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -42,6 +44,8 @@ pub struct Token {
 static CACHE: Mutex<Option<Token>> = Mutex::const_new(None);
 /// The same token, for code that can't wait (git commands run synchronously).
 static CURRENT: std::sync::Mutex<Option<Token>> = std::sync::Mutex::new(None);
+/// Sources whose token GitHub rejected; skipped until the saved token changes.
+static REJECTED: std::sync::Mutex<Vec<Source>> = std::sync::Mutex::new(Vec::new());
 
 /// What to tell someone with no token.
 pub const HOW_TO_FIX: &str = "Settings (⌘,) → GitHub token, or export GH_TOKEN";
@@ -58,28 +62,51 @@ pub async fn token() -> Result<Token, String> {
     Ok(found)
 }
 
-/// Looks again next time (after the saved token changes, or GitHub rejected it).
+/// Looks again next time, trying every source (after the saved token changes).
 pub async fn forget() {
+    REJECTED.lock().unwrap().clear();
     *CACHE.lock().await = None;
     *CURRENT.lock().unwrap() = None;
 }
 
+/// GitHub rejected this source's token: use the next source from now on.
+pub async fn reject(source: &Source) {
+    let mut cache = CACHE.lock().await;
+    REJECTED.lock().unwrap().push(source.clone());
+    *cache = None;
+    *CURRENT.lock().unwrap() = None;
+}
+
+fn usable(source: &Source) -> bool {
+    !REJECTED.lock().unwrap().contains(source)
+}
+
 async fn find() -> Option<Token> {
     let non_empty = |s: String| Some(s.trim().to_string()).filter(|s| !s.is_empty());
-    if let Some(value) = saved().and_then(non_empty) {
+    if usable(&Source::Settings)
+        && let Some(value) = saved().and_then(non_empty)
+    {
         return Some(Token { value, source: Source::Settings });
     }
+    if usable(&Source::GitCredential)
+        && let Some(value) = git_credential().await.and_then(non_empty)
+    {
+        return Some(Token { value, source: Source::GitCredential });
+    }
     for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
-        if let Some(value) = std::env::var(var).ok().and_then(non_empty) {
+        if usable(&Source::Env(var))
+            && let Some(value) = std::env::var(var).ok().and_then(non_empty)
+        {
             return Some(Token { value, source: Source::Env(var) });
         }
     }
-    if crate::backend::exec::which("gh").is_some()
+    if usable(&Source::Gh)
+        && crate::backend::exec::which("gh").is_some()
         && let Some(value) = crate::backend::exec::run("gh", &["auth", "token"], None, &[]).await.ok().and_then(non_empty)
     {
         return Some(Token { value, source: Source::Gh });
     }
-    git_credential().await.and_then(non_empty).map(|value| Token { value, source: Source::GitCredential })
+    None
 }
 
 /// Asks git's credential helpers for github.com, without ever prompting.

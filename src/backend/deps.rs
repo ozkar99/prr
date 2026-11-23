@@ -73,7 +73,7 @@ async fn github_status() -> ToolStatus {
         Ok(t) => t,
         Err(_) => {
             status.purpose = "access to pull requests".into();
-            status.problem = Some("no token found (Settings, $GH_TOKEN, gh, or git credentials for github.com)".into());
+            status.problem = Some("no token found (Settings, git credentials for github.com, $GH_TOKEN, or gh)".into());
             return status;
         }
     };

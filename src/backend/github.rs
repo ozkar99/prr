@@ -22,16 +22,27 @@ async fn client() -> Result<&'static reqwest::Client, String> {
         .await
 }
 
-/// Sends a request with the current token (see `auth`). A rejected token is
-/// forgotten, so the next request looks for one again.
+/// Sends a request with the current token (see `auth`). If GitHub rejects it,
+/// tries the next source's token, and keeps using whichever works.
 async fn send(req: reqwest::RequestBuilder) -> Result<reqwest::Response, String> {
-    let token = auth::token().await?;
-    let res = req.bearer_auth(&token.value).send().await.map_err(|e| e.to_string())?;
-    if res.status() == reqwest::StatusCode::UNAUTHORIZED {
-        auth::forget().await;
-        return Err(format!("GitHub rejected the token from {}. Add a working one in {}.", token.source.describe(), auth::HOW_TO_FIX));
+    let mut rejected: Vec<String> = Vec::new();
+    loop {
+        let token = match auth::token().await {
+            Ok(t) => t,
+            Err(_) if !rejected.is_empty() => {
+                return Err(format!("GitHub rejected the token from {}. Add a working one in {}.", rejected.join(", then "), auth::HOW_TO_FIX));
+            }
+            Err(e) => return Err(e),
+        };
+        let attempt = req.try_clone().ok_or("request can't be retried")?;
+        let res = attempt.bearer_auth(&token.value).send().await.map_err(|e| e.to_string())?;
+        if res.status() != reqwest::StatusCode::UNAUTHORIZED {
+            return Ok(res);
+        }
+        // Try the next source's token.
+        auth::reject(&token.source).await;
+        rejected.push(token.source.describe());
     }
-    Ok(res)
 }
 
 async fn rest(path: &str) -> Result<Value, String> {
