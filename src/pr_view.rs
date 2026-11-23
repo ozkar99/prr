@@ -8,6 +8,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use crate::diffview::{CodeSelection, Diff, DiffChangeIndicator, DiffEvent, DiffFile, DiffHunkSeparator, DiffLinePosition, DiffMode, DiffSide, DiffState, TokenHit};
 use crate::backend::mcp;
+use crate::language::{self, Language, ServerStatus};
 use crate::lsp::{self, LspClient};
 use crate::terminal::{self, TerminalEvent, TerminalView};
 use crate::review::{Conversation, Review, ReviewPanel, ReviewPanelEvent, ThreadView, ThreadZone};
@@ -59,10 +60,12 @@ struct NavEntry {
     line: Option<(DiffSide, usize)>,
 }
 
-enum LspState {
-    Starting,
-    Running(Arc<LspClient>),
-    Failed(String),
+/// A language server in this window: its status, and the client once it runs.
+struct ServerEntry {
+    status: ServerStatus,
+    client: Option<Arc<LspClient>>,
+    /// What the language wants shown next to the status (see `ServerSpec::note`).
+    note: Option<(String, String)>,
 }
 
 /// A list of locations to pick from (several definitions, or references),
@@ -135,7 +138,8 @@ pub struct PrView {
     back_stack: Vec<NavEntry>,
     /// The line last scrolled to, recorded for the back stack.
     current_line: Option<(DiffSide, usize)>,
-    lsp: HashMap<&'static str, LspState>,
+    /// Language servers by language id.
+    lsp: HashMap<String, ServerEntry>,
     hover: Option<Hover>,
     peek: Option<Peek>,
     /// Identifies the latest hover request; older ones are dropped.
@@ -488,7 +492,7 @@ impl PrView {
                 let target = line.map(|(side, n)| DiffLinePosition::new(patch_path.clone(), side, n)).or(first);
                 this.file_view = match patch.and_then(|p| DiffFile::parse(&p).map_err(|e| e.message().to_string())) {
                     Ok(files) if !files.is_empty() => {
-                        let language = highlight::language_for(&patch_path);
+                        let language = language::registry().grammar_for(&patch_path);
                         let files: Vec<DiffFile> = files.into_iter().map(|f| f.with_language(language)).collect();
                         let state = cx.new(|cx| {
                             let mut state = DiffState::new(files, cx)
@@ -540,26 +544,44 @@ impl PrView {
 
     // ---- Language servers ----
 
+    /// Starts a server for each language among the PR's files (as the registry describes them).
     fn start_language_servers(&mut self, cx: &mut Context<Self>) {
-        let mut langs: Vec<&'static str> = self
-            .pr
-            .files
-            .iter()
-            .filter_map(|f| lsp::server_for_language(highlight::language_for(&f.path)))
-            .collect();
-        langs.sort();
-        langs.dedup();
+        // Pick up languages.toml edits: they apply to PRs opened afterwards.
+        language::reload();
+        let registry = language::registry();
+        let mut langs: Vec<Arc<dyn Language>> = Vec::new();
+        for f in &self.pr.files {
+            if let Some(l) = registry.for_path(&f.path)
+                && !langs.iter().any(|x| x.id() == l.id())
+            {
+                langs.push(l);
+            }
+        }
+        let root = self.checkout.root.clone();
         for lang in langs {
-            self.lsp.insert(lang, LspState::Starting);
-            let root = self.checkout.root.clone();
-            let fut = backend::task(LspClient::start(lang, root));
+            let id = lang.id().to_string();
+            let spec = match lang.server(std::path::Path::new(&root)) {
+                None => continue,
+                Some(Err(e)) => {
+                    self.lsp.insert(id, ServerEntry { status: ServerStatus::Failed(e), client: None, note: None });
+                    continue;
+                }
+                Some(Ok(spec)) => spec,
+            };
+            self.lsp.insert(id.clone(), ServerEntry { status: ServerStatus::Starting, client: None, note: spec.note.clone() });
+            let fut = backend::task(LspClient::start(id.clone(), spec, lang.install_hint(), root.clone()));
             cx.spawn(async move |this, cx| {
                 let result = fut.await;
                 this.update(cx, |this, cx| {
-                    this.lsp.insert(lang, match result {
-                        Ok(client) => LspState::Running(client),
-                        Err(e) => LspState::Failed(e),
-                    });
+                    if let Some(entry) = this.lsp.get_mut(&id) {
+                        match result {
+                            Ok(client) => {
+                                entry.status = ServerStatus::Running;
+                                entry.client = Some(client);
+                            }
+                            Err(e) => entry.status = ServerStatus::Failed(e),
+                        }
+                    }
                     cx.notify();
                 })
                 .ok();
@@ -1075,8 +1097,8 @@ impl PrView {
     }
 
     pub fn stop_language_servers(&mut self) {
-        for (_, state) in self.lsp.drain() {
-            if let LspState::Running(client) = state {
+        for (_, entry) in self.lsp.drain() {
+            if let Some(client) = entry.client {
                 let _ = backend::task(async move { client.stop().await });
             }
         }
@@ -1095,19 +1117,17 @@ impl PrView {
     /// Where a hit is for the language server: absolute path, language, 0-based
     /// line, UTF-16 column, and the client. The old side of a PR diff isn't on
     /// disk, so it has no language features (as in the web version).
-    fn resolve(&mut self, hit: &TokenHit) -> Option<(String, &'static str, u32, u32, Arc<LspClient>)> {
+    /// (absolute path, LSP languageId, 0-based line, UTF-16 column, client).
+    fn resolve(&mut self, hit: &TokenHit) -> Option<(String, String, u32, u32, Arc<LspClient>)> {
         let shown = self.shown.clone()?;
         if matches!(shown, Shown::File(_)) && hit.position.side() == DiffSide::Original {
             return None;
         }
         let path = hit.position.path().to_string();
         let abs = if path.starts_with('/') { path.clone() } else { format!("{}/{}", self.checkout.root, path) };
-        let language = highlight::language_for(&abs);
-        let server = lsp::server_for_language(language)?;
-        let client = match self.lsp.get(server)? {
-            LspState::Running(c) => c.clone(),
-            _ => return None,
-        };
+        let lang = language::registry().for_path(&abs)?;
+        let client = self.lsp.get(lang.id())?.client.clone()?;
+        let language = lang.lsp_language_id(&abs);
         let lines = self.lines_of(&abs)?;
         let line_ix = hit.position.line().checked_sub(1)?;
         let text = lines.get(line_ix)?;
@@ -1143,7 +1163,7 @@ impl PrView {
             if this.read_with(cx, |this, _| this.hover_seq != seq).unwrap_or(true) {
                 return;
             }
-            let result = backend::task(async move { client.hover(&abs, language, line, character).await }).await;
+            let result = backend::task(async move { client.hover(&abs, &language, line, character).await }).await;
             this.update(cx, |this, cx| {
                 if this.hover_seq != seq {
                     return;
@@ -1167,7 +1187,7 @@ impl PrView {
     fn definition(&mut self, hit: TokenHit, peek: bool, cx: &mut Context<Self>) {
         let Some((abs, language, line, character, client)) = self.resolve(&hit) else { return };
         self.hover = None;
-        let fut = backend::task(async move { client.definition(&abs, language, line, character).await });
+        let fut = backend::task(async move { client.definition(&abs, &language, line, character).await });
         let point = hit.point;
         cx.spawn(async move |this, cx| {
             let Ok(locations) = fut.await else { return };
@@ -1185,7 +1205,7 @@ impl PrView {
     fn find_references(&mut self, hit: TokenHit, cx: &mut Context<Self>) {
         let Some((abs, language, line, character, client)) = self.resolve(&hit) else { return };
         self.hover = None;
-        let fut = backend::task(async move { client.references(&abs, language, line, character).await });
+        let fut = backend::task(async move { client.references(&abs, &language, line, character).await });
         let point = hit.point;
         cx.spawn(async move |this, cx| {
             let Ok(locations) = fut.await else { return };
@@ -1281,19 +1301,17 @@ impl PrView {
             .child(ui::spacer())
             .when(self.checkout.local.is_some(), |el| el.child(ui::chip("your clone", theme::FG)))
             .when(self.checkout.worktree_of.is_some(), |el| el.child(ui::chip("copy of your clone", theme::FG)))
-            .children(lsp::LANGUAGES.iter().filter_map(|lang| {
-                let (text, color, tip) = match self.lsp.get(lang)? {
-                    LspState::Starting => ("starting".to_string(), theme::WARN, None),
-                    LspState::Running(_) => ("running".to_string(), theme::ADD, None),
-                    LspState::Failed(e) if e.contains("not installed") => ("not installed".to_string(), theme::DEL, Some(e.clone())),
-                    LspState::Failed(e) => ("failed".to_string(), theme::DEL, Some(e.clone())),
-                };
-                let chip = ui::chip(format!("{}: {text}", lsp::server_name(lang)), color);
-                Some(match tip {
-                    Some(tip) => div().id(SharedString::from(format!("lsp-{lang}"))).child(chip).tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)).into_any_element(),
-                    None => chip.into_any_element(),
-                })
-            }))
+            // Each language draws its own server status (see Language::render_status).
+            .children({
+                let registry = language::registry();
+                let mut chips = Vec::new();
+                for lang in registry.all() {
+                    if let Some(entry) = self.lsp.get(lang.id()) {
+                        chips.push(lang.render_status(&entry.status, entry.note.as_ref(), cx));
+                    }
+                }
+                chips
+            })
             .child(
                 ui::link("pr-settings", "⚙")
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::settings::OpenSettings), cx)),
@@ -1765,7 +1783,7 @@ impl PrView {
         if let Some((abs, _, line)) = &target
             && let Some(lines) = self.lines_of(abs)
         {
-            let language = highlight::language_for(abs);
+            let language = language::registry().grammar_for(abs);
             let first = line.saturating_sub(4).max(1);
             let last = (first + 13).min(lines.len());
             for n in first..=last {
@@ -1910,6 +1928,7 @@ impl PrView {
                         "c" => "c",
                         "cpp" | "c++" => "cpp",
                         "python" | "py" => "python",
+                        "rust" | "rs" => "rust",
                         "bash" | "sh" | "shell" | "shellscript" => "bash",
                         _ => "",
                     };

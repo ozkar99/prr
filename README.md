@@ -23,12 +23,54 @@ run on Node.js and ship inside the app.
 | Go | `.go` | ✓ | ✓ gopls |
 | C / C++ | `.c` `.h` `.cc` `.cpp` `.cxx` `.hpp` `.hh` `.ipp` `.inl` `.m` `.mm` | ✓ | ✓ clangd |
 | Python | `.py` `.pyi` | ✓ | ✓ pyright (included) |
+| Rust | `.rs` | ✓ | ✓ rust-analyzer |
 | Shell | `.sh` `.bash` `.zsh` `.ksh`, `.bashrc` `.zshrc` `.profile` … | ✓ | ✓ bash-language-server (included) |
 | Starlark / Bazel | `BUILD` `WORKSPACE` `MODULE.bazel` `.bzl` `.bazel` `.star` | ✓ | ✓ starpls |
 
 Any other file shows as a plain diff, and you can still comment on it and review it as usual. Go,
-C/C++ and Starlark need their server installed ([below](#language-servers)); the Python and shell
-servers come with the app.
+C/C++, Rust and Starlark need their server installed ([below](#language-servers)); the Python and
+shell servers come with the app. You can add more languages yourself
+([below](#adding-your-own-languages)).
+
+### Adding your own languages
+
+Each language is a plug-in behind one interface: which files it handles, how to run its language
+server, and how its status shows in the header. Add languages, or adjust the built-in ones, in
+`~/Library/Application Support/review-tool/languages.toml`:
+
+```toml
+# A new language: hover, go to definition and references from its server.
+[[language]]
+name = "Zig"
+extensions = ["zig"]
+command = "zls"
+
+[[language]]
+name = "TypeScript"
+extensions = ["ts", "tsx"]
+command = "typescript-language-server"
+args = ["--stdio"]
+language_id = "typescript"
+install = "npm install -g typescript-language-server typescript"
+
+# Adjust a built-in (go, cpp, python, rust, shell, starlark): only what you set changes.
+[[language]]
+id = "go"
+command = "/opt/tools/gopls"
+env = { GOFLAGS = "-mod=mod" }
+```
+
+| Key | Meaning |
+|---|---|
+| `name`, `id` | Display name and identifier (defaults to the name in lowercase). A built-in's `id` adjusts it. |
+| `extensions`, `filenames` | Which files it handles (`["rs"]`, `["Justfile"]`). |
+| `command`, `args`, `env` | The language server to run, in the PR's checkout. |
+| `language_id` | The LSP language id (defaults to the `id`). |
+| `initialization_options` | Sent to the server when it starts. |
+| `grammar` | Borrow a built-in grammar for syntax colors: `go`, `c`, `cpp`, `python`, `rust` or `bash`. Without one, added languages show without colors. |
+| `install` | Shown in the header and the setup check when the server isn't installed. |
+
+Changes apply to PRs you open afterwards. Mistakes in the file show in the home screen's setup check.
 
 ## Install
 
@@ -58,6 +100,7 @@ ones for the languages you review:
 | Go | `.go` | gopls | `brew install go`, then `go install golang.org/x/tools/gopls@latest` |
 | C/C++ | `.c` `.cc` `.cpp` `.h` `.hpp` … | clangd | comes with the Xcode Command Line Tools (Homebrew's `llvm` is used if installed) |
 | Python | `.py` `.pyi` | pyright | nothing: included |
+| Rust | `.rs` | rust-analyzer | `rustup component add rust-analyzer` |
 | Shell | `.sh` `.bash` `.zsh` `.ksh`, `.bashrc`, `.zshrc`, … | bash-language-server | nothing: included |
 | Starlark / Bazel | `BUILD` `.bazel` `.bzl` `WORKSPACE` `MODULE.bazel` | starpls | from [starpls releases](https://github.com/withered-magic/starpls/releases), on your `PATH` |
 
@@ -253,6 +296,9 @@ PR code is untrusted, so the app never builds or runs it:
   when you go to a definition in it.
 - gopls runs with `GOTOOLCHAIN=local`, so a PR's `go.mod` can't make it download and run another Go
   toolchain.
+- rust-analyzer runs with build scripts and proc macros off, on your own toolchain (a PR's
+  `rust-toolchain.toml` can't switch it), and ignores rustc wrappers a PR's `.cargo/config.toml`
+  sets.
 - Comments and descriptions are Markdown drawn by the app itself; nothing in them runs.
 
 ## Development

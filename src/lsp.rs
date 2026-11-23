@@ -1,7 +1,8 @@
-//! In-process LSP client (replaces the web version's relay + monaco-languageclient).
-//! One server per language per open PR: gopls, clangd, pyright, starpls,
-//! bash-language-server. Speaks JSON-RPC over the server's stdio.
+//! In-process LSP client: one server per language per open PR, speaking
+//! JSON-RPC over the server's stdio. Which servers exist, and how to run them,
+//! comes from the languages (`src/language`); this knows only the protocol.
 use crate::backend::exec::which;
+use crate::language::ServerSpec;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -11,109 +12,6 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, oneshot};
-
-/// Server language keys (like the web version's LspLanguage).
-pub const LANGUAGES: &[&str] = &["go", "cpp", "python", "starlark", "shell"];
-
-pub fn server_name(lang: &str) -> &'static str {
-    match lang {
-        "go" => "gopls",
-        "cpp" => "clangd",
-        "python" => "pyright",
-        "starlark" => "starpls",
-        "shell" => "bash-language-server",
-        _ => "language server",
-    }
-}
-
-/// Which server handles a file, by the highlighter's language name.
-pub fn server_for_language(language: &str) -> Option<&'static str> {
-    Some(match language {
-        "go" => "go",
-        "cpp" | "c" => "cpp",
-        "python" => "python",
-        "starlark" => "starlark",
-        "bash" => "shell",
-        _ => return None,
-    })
-}
-
-/// LSP `languageId` for didOpen.
-fn language_id(language: &str) -> &'static str {
-    match language {
-        "go" => "go",
-        "c" => "c",
-        "cpp" => "cpp",
-        "python" => "python",
-        "starlark" => "starlark",
-        "bash" => "shellscript",
-        _ => "plaintext",
-    }
-}
-
-fn install_hint(lang: &str) -> &'static str {
-    match lang {
-        "go" => "go install golang.org/x/tools/gopls@latest",
-        "cpp" => "xcode-select --install  (or: brew install llvm)",
-        "python" | "shell" => "runs on Node.js: brew install node",
-        "starlark" => "download starpls from https://github.com/withered-magic/starpls/releases and put it on your PATH",
-        _ => "",
-    }
-}
-
-/// Node-based servers ship with the app in Resources/language-servers
-/// (scripts/bundle-macos.sh); development builds use target/language-servers
-/// (`npm install --prefix target/language-servers pyright bash-language-server`).
-fn bundled(rel: &str) -> Option<PathBuf> {
-    // Resolved, so a symlinked `prr` command still finds the bundle's Resources.
-    let exe_dir = std::env::current_exe().ok()?.canonicalize().ok()?.parent()?.to_path_buf();
-    let candidates = [
-        exe_dir.join("../Resources/language-servers/node_modules").join(rel),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/language-servers/node_modules").join(rel),
-    ];
-    candidates.into_iter().find(|p| p.exists()).and_then(|p| p.canonicalize().ok())
-}
-
-fn command(lang: &str, root: &Path) -> Result<(String, Vec<String>, Vec<(&'static str, &'static str)>), String> {
-    Ok(match lang {
-        // GOTOOLCHAIN=local stops a PR's go.mod from making us download and run a different Go toolchain.
-        "go" => ("gopls".into(), vec!["serve".into()], vec![("GOTOOLCHAIN", "local")]),
-        "cpp" => {
-            let brew = "/opt/homebrew/opt/llvm/bin/clangd";
-            let cmd = if Path::new(brew).exists() { brew } else { "clangd" };
-            let mut args: Vec<String> =
-                ["--background-index", "--header-insertion=never", "--clang-tidy=false", "--pch-storage=memory"].map(String::from).into();
-            if let Some(dir) =
-                ["build", "out", "cmake-build-debug", "builddir"].iter().map(|d| root.join(d)).find(|d| d.join("compile_commands.json").exists())
-            {
-                args.push(format!("--compile-commands-dir={}", dir.display()));
-            }
-            (cmd.into(), args, vec![])
-        }
-        "python" => {
-            let js = bundled("pyright/langserver.index.js").ok_or("pyright isn't bundled with this build")?;
-            ("node".into(), vec![js.to_string_lossy().into(), "--stdio".into()], vec![])
-        }
-        "starlark" => ("starpls".into(), vec!["server".into()], vec![]),
-        "shell" => {
-            let js = bundled("bash-language-server/out/cli.js").ok_or("bash-language-server isn't bundled with this build")?;
-            ("node".into(), vec![js.to_string_lossy().into(), "start".into()], vec![])
-        }
-        other => return Err(format!("unsupported language: {other}")),
-    })
-}
-
-/// clangd: guessed flags for files without compile commands (repo root and usual include dirs).
-fn clangd_fallback_flags(root: &Path) -> Vec<String> {
-    let mut flags = vec!["-std=c++20".to_string()];
-    for dir in ["", "include", "src", "lib", "third_party", "external"] {
-        let p = if dir.is_empty() { root.to_path_buf() } else { root.join(dir) };
-        if p.is_dir() {
-            flags.push(format!("-I{}", p.display()));
-        }
-    }
-    flags
-}
 
 pub fn file_uri(path: &str) -> String {
     let mut out = String::from("file://");
@@ -161,7 +59,8 @@ pub struct Location {
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>;
 
 pub struct LspClient {
-    pub lang: &'static str,
+    /// The language's id.
+    pub lang: String,
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Pending,
     next_id: AtomicI64,
@@ -198,21 +97,26 @@ async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(r: &mut R) -> Option<V
 }
 
 impl LspClient {
-    /// Starts the server for `lang` in `root` and runs the initialize handshake.
-    pub async fn start(lang: &'static str, root: String) -> Result<Arc<Self>, String> {
-        let root_path = PathBuf::from(&root);
-        let (cmd, args, env) = command(lang, &root_path)?;
-        let resolved = which(&cmd).ok_or_else(|| format!("not installed: {cmd}. To install: {}", install_hint(lang)))?;
+    /// Starts `spec` for the language `lang` in `root` and runs the initialize handshake.
+    pub async fn start(lang: String, spec: ServerSpec, install_hint: String, root: String) -> Result<Arc<Self>, String> {
+        let command = &spec.command;
+        let resolved = if Path::new(command).is_absolute() {
+            Path::new(command).exists().then(|| PathBuf::from(command))
+        } else {
+            which(command)
+        };
+        let hint = if install_hint.is_empty() { String::new() } else { format!(". To install: {install_hint}") };
+        let resolved = resolved.ok_or_else(|| format!("not installed: {command}{hint}"))?;
         let mut child = Command::new(resolved)
-            .args(&args)
-            .envs(env)
+            .args(&spec.args)
+            .envs(spec.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .current_dir(&root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| format!("{cmd}: {e}"))?;
+            .map_err(|e| format!("{command}: {e}"))?;
         let stdin = Arc::new(Mutex::new(child.stdin.take().unwrap()));
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
@@ -259,11 +163,7 @@ impl LspClient {
             opened: Mutex::new(HashSet::new()),
             child: Mutex::new(Some(child)),
         });
-        let init_options = match lang {
-            "cpp" => json!({ "fallbackFlags": clangd_fallback_flags(&root_path) }),
-            "go" => json!({ "semanticTokens": true }),
-            _ => Value::Null,
-        };
+        let init_options = spec.initialization_options.clone();
         let uri = file_uri(&root);
         client
             .request(
@@ -302,14 +202,14 @@ impl LspClient {
     }
 
     /// Opens a document on the server once (its text from disk), so requests about it work.
-    pub async fn ensure_open(&self, path: &str, language: &str) -> Result<(), String> {
+    pub async fn ensure_open(&self, path: &str, language_id: &str) -> Result<(), String> {
         if !self.opened.lock().await.insert(path.to_string()) {
             return Ok(());
         }
         let text = tokio::fs::read_to_string(path).await.map_err(|e| format!("{path}: {e}"))?;
         self.notify(
             "textDocument/didOpen",
-            json!({ "textDocument": { "uri": file_uri(path), "languageId": language_id(language), "version": 1, "text": text } }),
+            json!({ "textDocument": { "uri": file_uri(path), "languageId": language_id, "version": 1, "text": text } }),
         )
         .await
     }
@@ -411,7 +311,10 @@ mod tests {
         std::fs::write(&file, src).unwrap();
         let root = dir.canonicalize().unwrap().to_string_lossy().to_string();
         let path = format!("{root}/t.go");
-        let client = LspClient::start("go", root).await.unwrap();
+        use crate::language::Language as _;
+        let go = crate::language::builtin::Go;
+        let spec = go.server(Path::new(&root)).unwrap().unwrap();
+        let client = LspClient::start("go".into(), spec, go.install_hint(), root).await.unwrap();
         // "Add" in `var x = Add(1, 2)`: line 5, column 8.
         let hover = client.hover(&path, "go", 5, 9).await.unwrap().unwrap_or_default();
         assert!(hover.contains("func Add(a int, b int) int"), "{hover}");
