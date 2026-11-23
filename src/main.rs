@@ -45,6 +45,30 @@ fn forget_parent_agent_session() {
     }
 }
 
+actions!(review_tool, [Quit, Hide, HideOthers, ShowAll]);
+
+/// The macOS menu bar: the app menu with Settings, Hide and Quit.
+fn set_up_menus(cx: &mut App) {
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Hide, cx| cx.hide());
+    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+    cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-h", Hide, None),
+        KeyBinding::new("alt-cmd-h", HideOthers, None),
+    ]);
+    cx.set_menus([Menu::new("Review Tool").items([
+        MenuItem::action("Settings…", settings::OpenSettings),
+        MenuItem::separator(),
+        MenuItem::action("Hide Review Tool", Hide),
+        MenuItem::action("Hide Others", HideOthers),
+        MenuItem::action("Show All", ShowAll),
+        MenuItem::separator(),
+        MenuItem::action("Quit Review Tool", Quit),
+    ])]);
+}
+
 fn main() {
     // `review-tool --mcp-stdio <url> <token>`: the stdio MCP bridge agents start (no UI).
     let args: Vec<String> = std::env::args().collect();
@@ -75,6 +99,7 @@ fn main() {
         pr_view::init(cx);
         theme::apply(cx);
         settings::init(cx);
+        set_up_menus(cx);
 
         let bounds = Bounds::centered(None, size(px(1500.), px(950.)), cx);
         let app_view: std::rc::Rc<std::cell::RefCell<Option<WeakEntity<app::AppView>>>> = Default::default();
