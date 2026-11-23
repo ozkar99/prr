@@ -456,6 +456,7 @@ impl Render for TerminalView {
             .track_focus(&self.focus)
             .size_full()
             .bg(rgb_hsla(BG))
+            .cursor_text()
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| this.on_key(ev, cx)))
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _, cx| this.on_scroll(ev, cx)))
             .on_mouse_down(

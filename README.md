@@ -90,9 +90,12 @@ You can also run `review-tool` with no PR (outside a repo) and pick one in the a
   copy, which matters for big monorepos, and your language-server caches are reused. The PR's
   commits are fetched into your clone without adding any branches or refs. If your clone isn't
   already at the PR (e.g. after `gh pr checkout`), the app asks before switching it, and switches
-  it back to your branch when you close the PR. It won't switch a clone with uncommitted changes;
-  you can review in a separate checkout instead. If another window is already reviewing a PR in
-  your clone, a second PR from the same repo uses the app's own copy instead.
+  it back to your branch when you close the PR. It won't switch a clone with uncommitted changes.
+- **More PRs from the same clone** (another window already uses it), or a clone with uncommitted
+  changes: the PR gets a `git worktree` of your clone in the app's folder, filled with
+  copy-on-write copies of your checkout (APFS clones). It shares your clone's objects and, on disk,
+  costs only the files that differ, so several PRs of a large monorepo stay cheap. It appears in
+  your clone's `git worktree list` while the window is open and is removed when you close it.
 - **Anywhere else** (or from the app's PR list), the app uses its own copy: one clone per repo,
   shared by its PRs, plus a checkout per PR. The clone is blobless (history without file
   contents), so even a large repo's first PR opens quickly; later PRs only fetch what's new.

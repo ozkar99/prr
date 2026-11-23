@@ -10,6 +10,10 @@ pub struct PRRef {
     /// The user's clone of the repo, when `review-tool` was run inside one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_repo: Option<String>,
+    /// Review in a copy-on-write worktree of that clone instead of the clone
+    /// itself (another window is using the clone, or it has changes).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_worktree: bool,
 }
 
 /// Parses a PR URL or owner/repo#123.
@@ -18,7 +22,7 @@ pub fn parse_pr_ref(input: &str) -> Option<PRRef> {
     let short = regex::Regex::new(r"^([\w.-]+)/([\w.-]+)#(\d+)$").unwrap();
     let s = input.trim();
     let caps = url.captures(s).or_else(|| short.captures(s))?;
-    Some(PRRef { owner: caps[1].into(), repo: caps[2].into(), number: caps[3].parse().ok()?, local_repo: None })
+    Some(PRRef { owner: caps[1].into(), repo: caps[2].into(), number: caps[3].parse().ok()?, local_repo: None, local_worktree: false })
 }
 
 #[derive(Serialize, Clone)]
@@ -79,6 +83,8 @@ pub struct Checkout {
     pub head_sha: String,
     /// Set when the PR is shown in the user's own clone, not an app-managed worktree.
     pub local: Option<LocalClone>,
+    /// Set when `root` is a worktree made from the user's clone (this path): removed on close.
+    pub worktree_of: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]

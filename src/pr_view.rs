@@ -1009,6 +1009,7 @@ impl PrView {
             )
             .child(ui::spacer())
             .when(self.checkout.local.is_some(), |el| el.child(ui::chip("your clone", theme::FG)))
+            .when(self.checkout.worktree_of.is_some(), |el| el.child(ui::chip("copy of your clone", theme::FG)))
             .children(lsp::LANGUAGES.iter().filter_map(|lang| {
                 let (text, color, tip) = match self.lsp.get(lang)? {
                     LspState::Starting => ("starting".to_string(), theme::WARN, None),

@@ -106,14 +106,14 @@ pub fn route(request: Request, cx: &mut App) {
     let mut pr = pr;
     let key = (pr.owner.to_lowercase(), pr.repo.to_lowercase(), pr.number);
     // Your clone can only be on one PR: if another window is reviewing in it,
-    // this PR uses the app's own checkout instead of switching it underneath.
+    // this PR gets a copy-on-write worktree of the clone instead of switching it.
     if let Some(local) = pr.local_repo.clone() {
         let busy = windows.iter().filter_map(|(_, v)| v.upgrade()).any(|v| {
             let v = v.read(cx);
             v.local_clone(cx).as_deref() == Some(local.as_str()) && v.showing(cx).as_ref() != Some(&key)
         });
         if busy {
-            pr.local_repo = None;
+            pr.local_worktree = true;
         }
     }
     // Already open (or loading): bring that window forward.

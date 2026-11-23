@@ -31,7 +31,7 @@ impl AppView {
     pub fn open(&mut self, pr: crate::backend::types::PRRef, window: &mut Window, cx: &mut Context<Self>) {
         self.close_pr(cx);
         self.opening = Some((pr.owner.to_lowercase(), pr.repo.to_lowercase(), pr.number));
-        self.home.update(cx, |home, cx| home.open(pr.owner, pr.repo, pr.number, pr.local_repo, window, cx));
+        self.home.update(cx, |home, cx| home.open(pr.owner, pr.repo, pr.number, pr.local_repo, pr.local_worktree, window, cx));
     }
 
     /// The PR this window shows or is loading.
@@ -74,6 +74,11 @@ impl AppView {
             let v = view.read(cx);
             (v.checkout.local.clone(), v.checkout.head_sha.clone(), v.pr.number)
         };
+        // A copy-on-write worktree of the user's clone goes away with its window.
+        if let Some(clone) = view.read(cx).checkout.worktree_of.clone() {
+            let root = view.read(cx).checkout.root.clone();
+            let _ = backend::task(async move { git::remove_clone_worktree(&root, &clone).await });
+        }
         self.home.update(cx, |home, cx| home.refresh(cx));
         if let Some(local) = local {
             if let Some(from) = local.switched_from.clone() {
