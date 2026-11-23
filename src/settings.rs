@@ -82,6 +82,56 @@ fn apply(cx: &mut App) {
     cx.refresh_windows();
 }
 
+// ---------------------------------------------------------------- command line
+
+/// Where `review-tool` goes on the PATH (Homebrew's bin on Apple Silicon, else /usr/local/bin).
+fn command_dir() -> PathBuf {
+    let brew = PathBuf::from("/opt/homebrew/bin");
+    if brew.is_dir() { brew } else { PathBuf::from("/usr/local/bin") }
+}
+
+/// The app binary the command should point at (this one, symlinks resolved).
+fn app_binary() -> Option<PathBuf> {
+    std::env::current_exe().ok()?.canonicalize().ok()
+}
+
+pub enum CommandStatus {
+    /// `review-tool` runs this app.
+    Installed(PathBuf),
+    /// `review-tool` exists but runs another copy (e.g. the Homebrew app while
+    /// this is a development build).
+    Elsewhere(PathBuf, PathBuf),
+    Missing(PathBuf),
+}
+
+pub fn command_status() -> CommandStatus {
+    let link = command_dir().join("review-tool");
+    match (link.canonicalize(), app_binary()) {
+        (Ok(target), Some(exe)) if target == exe => CommandStatus::Installed(link),
+        (Ok(target), _) => CommandStatus::Elsewhere(link, target),
+        _ => CommandStatus::Missing(link),
+    }
+}
+
+/// Links `review-tool` on the PATH to this app's binary (like VS Code's
+/// "Install 'code' command in PATH"). Homebrew installs already have it.
+pub fn install_command() -> Result<PathBuf, String> {
+    let exe = app_binary().ok_or("can't find the app's binary")?;
+    let dir = command_dir();
+    let link = dir.join("review-tool");
+    if link.symlink_metadata().is_ok() {
+        std::fs::remove_file(&link).map_err(|e| format!("{}: {e}", link.display()))?;
+    }
+    std::os::unix::fs::symlink(&exe, &link).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!("No permission to write to {}. Run in a terminal:\n  sudo ln -sf \"{}\" {}", dir.display(), exe.display(), link.display())
+        } else {
+            format!("{}: {e}", link.display())
+        }
+    })?;
+    Ok(link)
+}
+
 // ---------------------------------------------------------------- screen
 
 pub enum SettingsEvent {
@@ -90,6 +140,7 @@ pub enum SettingsEvent {
 
 pub struct SettingsView {
     agent_command: Entity<InputState>,
+    command_result: Option<Result<String, String>>,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -110,7 +161,7 @@ impl SettingsView {
                 update(cx, |s| s.agent_command = value);
             }
         });
-        Self { agent_command, focus: cx.focus_handle(), _subs: vec![sub] }
+        Self { agent_command, command_result: None, focus: cx.focus_handle(), _subs: vec![sub] }
     }
 }
 
@@ -213,6 +264,42 @@ impl Render for SettingsView {
                             .child(ui::muted("For example: codex, or gemini. It runs through your login shell and gets the review context as REVIEW_TOOL_* environment variables and an MCP server ($REVIEW_TOOL_MCP_CONFIG, $REVIEW_TOOL_MCP_STDIO). Applies the next time the agent starts.").text_size(theme::TEXT_SMALL))
                             .children(legacy_note.map(|n| ui::muted(n).text_size(theme::TEXT_SMALL))),
                     ))
+                    .child({
+                        let status = command_status();
+                        let result = self.command_result.clone();
+                        let (text, color, button) = match &status {
+                            CommandStatus::Installed(link) => (format!("Installed: {}", link.display()), theme::ADD, None),
+                            CommandStatus::Elsewhere(link, target) => {
+                                (format!("{} runs {}", link.display(), target.display()), theme::MUTED, Some("Point it at this app"))
+                            }
+                            CommandStatus::Missing(link) => (format!("Not installed at {}", link.display()), theme::MUTED, Some("Install review-tool command")),
+                        };
+                        row(
+                            "Command line",
+                            Some("Open PRs from a terminal: review-tool <PR>. Homebrew installs it for you."),
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(10.))
+                                        .child(div().flex_1().min_w_0().text_size(theme::TEXT_SMALL).text_color(hsla(color)).child(text))
+                                        .children(button.map(|label| {
+                                            ui::button("install-command", label).flex_shrink_0().on_click(cx.listener(|this, _, _, cx| {
+                                                this.command_result = Some(install_command().map(|l| format!("Installed {}", l.display())));
+                                                cx.notify();
+                                            }))
+                                        })),
+                                )
+                                .children(result.map(|r| match r {
+                                    Ok(m) => ui::muted(m).text_size(theme::TEXT_SMALL),
+                                    Err(e) => ui::error_text(e).text_size(theme::TEXT_SMALL),
+                                })),
+                        )
+                    })
                     .child(row("Editor font size", Some("Code in diffs and files."), stepper("editor-font", s.editor_font_size, EDITOR_FONT, |s, v| s.editor_font_size = v, cx)))
                     .child(row("Terminal font size", Some("The agent panel."), stepper("terminal-font", s.terminal_font_size, TERMINAL_FONT, |s, v| s.terminal_font_size = v, cx)))
                     .child(div().pt(px(10.)).text_size(theme::TEXT_SMALL).text_color(hsla(theme::MUTED)).child(format!("Saved in {}", path().display()))),
