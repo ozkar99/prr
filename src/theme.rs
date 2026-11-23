@@ -30,7 +30,7 @@ pub const TITLEBAR: Pixels = px(38.);
 pub const SIDEBAR_WIDTH: Pixels = px(300.);
 /// Editor font, as in the web version's Monaco settings (Menlo 13).
 pub const MONO_FONT: &str = "Menlo";
-pub const MONO_SIZE: Pixels = px(13.);
+pub const MONO_SIZE: Pixels = px(12.);
 
 pub fn hsla(hex: u32) -> Hsla {
     rgb(hex).into()
