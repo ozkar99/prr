@@ -67,6 +67,8 @@ struct NavEntry {
 struct ServerEntry {
     status: ServerStatus,
     client: Option<Arc<LspClient>>,
+    /// Which warm server this can become again (see `lsp::park`).
+    key: String,
     /// What the language wants shown next to the status (see `ServerSpec::note`).
     note: Option<(String, String)>,
 }
@@ -618,7 +620,7 @@ impl PrView {
             let spec = match lang.server(std::path::Path::new(&root)) {
                 None => continue,
                 Some(Err(e)) => {
-                    self.lsp.insert(id, ServerEntry { status: ServerStatus::Failed(e), client: None, note: None });
+                    self.lsp.insert(id, ServerEntry { status: ServerStatus::Failed(e), client: None, key: String::new(), note: None });
                     continue;
                 }
                 Some(Ok(spec)) => spec,
@@ -626,8 +628,16 @@ impl PrView {
             let mut spec = spec;
             let changed: Vec<String> = self.pr.files.iter().map(|f| f.path.clone()).collect();
             lang.adjust_for_pr(&mut spec, std::path::Path::new(&root), &changed);
-            self.lsp.insert(id.clone(), ServerEntry { status: ServerStatus::Starting, client: None, note: spec.note.clone() });
-            let fut = backend::task(LspClient::start(id.clone(), spec, lang.install_hint(), root.clone()));
+            let key = crate::lsp::pool_key(&id, &root, &spec);
+            self.lsp.insert(id.clone(), ServerEntry { status: ServerStatus::Starting, client: None, key: key.clone(), note: spec.note.clone() });
+            // A server still warm from this PR's last window, or a new one.
+            let (lang_id, hint, root2) = (id.clone(), lang.install_hint(), root.clone());
+            let fut = backend::task(async move {
+                match crate::lsp::take(&key).await {
+                    Some(client) => Ok(client),
+                    None => LspClient::start(lang_id, spec, hint, root2).await,
+                }
+            });
             cx.spawn(async move |this, cx| {
                 let result = fut.await;
                 this.update(cx, |this, cx| {
@@ -1293,7 +1303,23 @@ impl PrView {
         if let Ok(session) = &self.mcp {
             session.end();
         }
-        self.stop_language_servers();
+        // Approved: done with this PR. Otherwise keep its servers warm for a reopen.
+        if self.approved(cx) {
+            self.stop_language_servers();
+        } else {
+            for (_, entry) in self.lsp.drain() {
+                if let Some(client) = entry.client {
+                    let key = entry.key;
+                    let _ = backend::task(async move { crate::lsp::park(key, client).await });
+                }
+            }
+        }
+    }
+
+    /// Whether you approved this PR in this window: closing it then cleans up
+    /// (its servers, its copy of your clone, its branch).
+    pub fn approved(&self, cx: &App) -> bool {
+        self.review.read(cx).approved
     }
 
     pub fn stop_language_servers(&mut self) {

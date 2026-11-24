@@ -244,6 +244,14 @@ impl LspClient {
         Ok(locations(&result))
     }
 
+    /// Closes every file this client opened, so a later user starts clean.
+    async fn close_all(&self) {
+        let opened: Vec<String> = self.opened.lock().await.drain().collect();
+        for path in opened {
+            let _ = self.notify("textDocument/didClose", json!({ "textDocument": { "uri": file_uri(&path) } })).await;
+        }
+    }
+
     pub async fn stop(&self) {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), self.request("shutdown", Value::Null)).await;
         let _ = self.notify("exit", Value::Null).await;
@@ -325,5 +333,68 @@ mod tests {
         assert_eq!(refs.len(), 2, "{refs:?}");
         client.stop().await;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// ---- Warm servers for reopened PRs ----
+
+/// How long a server stays warm after its PR window closes.
+const KEEP_WARM: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+struct Parked {
+    key: String,
+    client: Arc<LspClient>,
+    since: std::time::Instant,
+}
+
+static PARKED: tokio::sync::Mutex<Vec<Parked>> = tokio::sync::Mutex::const_new(Vec::new());
+
+/// What makes two servers interchangeable: language, checkout and how it's run.
+pub fn pool_key(lang: &str, root: &str, spec: &ServerSpec) -> String {
+    format!("{lang}\n{root}\n{}\n{:?}\n{:?}\n{}", spec.command, spec.args, spec.env, spec.initialization_options)
+}
+
+/// Keeps a server running for a while after its PR closes, so reopening the
+/// PR doesn't load everything again (gopls in a monorepo takes minutes).
+pub async fn park(key: String, client: Arc<LspClient>) {
+    client.close_all().await;
+    PARKED.lock().await.push(Parked { key, client, since: std::time::Instant::now() });
+    static REAPER: std::sync::Once = std::sync::Once::new();
+    REAPER.call_once(|| {
+        tokio::spawn(async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                reap().await;
+            }
+        });
+    });
+}
+
+/// A warm server for `key`, if one is parked.
+pub async fn take(key: &str) -> Option<Arc<LspClient>> {
+    reap().await;
+    let mut parked = PARKED.lock().await;
+    let ix = parked.iter().position(|p| p.key == key)?;
+    Some(parked.remove(ix).client)
+}
+
+/// Stops servers parked for longer than [`KEEP_WARM`].
+async fn reap() {
+    let expired: Vec<Arc<LspClient>> = {
+        let mut parked = PARKED.lock().await;
+        let (old, keep): (Vec<Parked>, Vec<Parked>) = parked.drain(..).partition(|p| p.since.elapsed() >= KEEP_WARM);
+        *parked = keep;
+        old.into_iter().map(|p| p.client).collect()
+    };
+    for client in expired {
+        client.stop().await;
+    }
+}
+
+/// Stops every parked server (quitting).
+pub async fn stop_parked() {
+    let all: Vec<Arc<LspClient>> = PARKED.lock().await.drain(..).map(|p| p.client).collect();
+    for client in all {
+        client.stop().await;
     }
 }

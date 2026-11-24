@@ -24,6 +24,8 @@ pub struct Review {
     pub state: Option<ReviewState>,
     pub loading: bool,
     pub error: Option<String>,
+    /// You approved the PR from this window.
+    pub approved: bool,
 }
 
 impl Review {
@@ -36,6 +38,7 @@ impl Review {
             state: None,
             loading: true,
             error: None,
+            approved: false,
         };
         review.load(cx);
         review
@@ -117,7 +120,14 @@ impl Review {
     }
 
     pub fn submit(&mut self, event: &'static str, body: String, cx: &mut Context<Self>) -> Task<Result<(), String>> {
-        self.mutate(cx, move |h, sha| async move { github::submit_review(h, &sha, event, &body).await })
+        let task = self.mutate(cx, move |h, sha| async move { github::submit_review(h, &sha, event, &body).await });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            if result.is_ok() && event == "APPROVE" {
+                this.update(cx, |this, _| this.approved = true).ok();
+            }
+            result
+        })
     }
 
     pub fn pending_count(&self) -> usize {

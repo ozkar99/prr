@@ -162,8 +162,15 @@ opens a new window, **⌘`** switches windows, and the app quits with its last w
 - **More PRs from the same clone** (another window is using it), or a clone with uncommitted
   changes: the PR gets a `git worktree` of your clone whose files are copy-on-write copies of your
   checkout. It shares the clone's objects and only costs disk for the files that differ, so
-  several PRs of a large monorepo stay cheap. It shows in `git worktree list` while the window is
-  open and is removed when you close it.
+  several PRs of a large monorepo stay cheap. It shows in `git worktree list`, and it stays when
+  you close the window, so reopening the PR is quick.
+
+**Reopening a PR is cheap.** Closing a PR keeps what it needs: its `prr/pr-<number>` branch or its
+copy of your clone, and its language servers keep running in the background for 15 minutes, so
+gopls doesn't load a monorepo again when you come back to the same PR. Once you approve the PR in
+prr, closing it cleans up instead: the servers stop, its copy is removed, and its branch is
+deleted (unless you committed on it). Copies of PRs that were merged or closed on GitHub, or not
+opened for 14 days, are removed when prr starts; quitting prr stops the background servers.
 - **Anywhere else**, the app uses its own copy: a blobless clone per repo (history without file
   contents, so even a big repo's first PR opens quickly) and a checkout per PR.
 

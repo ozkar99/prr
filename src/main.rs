@@ -51,7 +51,11 @@ actions!(review_tool, [Quit, Hide, HideOthers, ShowAll]);
 
 /// The macOS menu bar: the app menu with Settings, Hide and Quit.
 fn set_up_menus(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Quit, cx| {
+        // Warm language servers (kept for reopened PRs) go with the app.
+        let _ = backend::block_on(crate::lsp::stop_parked());
+        cx.quit()
+    });
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
