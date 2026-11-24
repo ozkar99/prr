@@ -5,8 +5,8 @@
 #   brew trust --cask ozkar99/prr/prr
 #   brew install --cask prr
 cask "prr" do
-  version "4.1.6"
-  sha256 "31e1ed2081f87823916c6cf3e3c865ea9c1962c819aadcea8e28ff62ad7d8f6c"
+  version "4.1.7"
+  sha256 "98dc087faf92e9d0a233d93c2e1db0002c86b6c12496089fbaab9fafa13447a5"
 
   url "https://github.com/ozkar99/prr/releases/download/v#{version}/prr_#{version}_universal.dmg"
   name "prr"
