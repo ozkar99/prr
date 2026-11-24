@@ -45,7 +45,12 @@ pub async fn checkout(
 ) -> Result<CheckoutResult, String> {
     match local_repo {
         Some(path) if local_worktree => checkout_clone_worktree(pr, Path::new(path), progress).await.map(CheckoutResult::Ready),
-        Some(path) => checkout_local(pr, Path::new(path), allow_switch, progress).await,
+        Some(path) => match checkout_local(pr, Path::new(path), allow_switch, &progress).await? {
+            // Uncommitted changes: the clone can't be switched, so review in a
+            // copy-on-write worktree of it instead (cheap even for a monorepo).
+            CheckoutResult::NeedsSwitch { dirty: true, .. } => checkout_clone_worktree(pr, Path::new(path), progress).await.map(CheckoutResult::Ready),
+            other => Ok(other),
+        },
         None => checkout_managed(pr, progress).await.map(CheckoutResult::Ready),
     }
 }
@@ -102,8 +107,8 @@ async fn fetch_into_clone(pr: &PRDetails, repo: &Path, progress: &impl Fn(String
     Ok((top, merge_base))
 }
 
-async fn checkout_local(pr: &PRDetails, repo: &Path, allow_switch: bool, progress: impl Fn(String)) -> Result<CheckoutResult, String> {
-    let (top, merge_base) = fetch_into_clone(pr, repo, &progress).await?;
+async fn checkout_local(pr: &PRDetails, repo: &Path, allow_switch: bool, progress: &impl Fn(String)) -> Result<CheckoutResult, String> {
+    let (top, merge_base) = fetch_into_clone(pr, repo, progress).await?;
     let top_s = top.to_string_lossy().to_string();
 
     let head = git(&["rev-parse", "HEAD"], Some(&top)).await?.trim().to_string();
