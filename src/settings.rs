@@ -30,19 +30,11 @@ pub struct Settings {
     pub split_ratio: f32,
     /// Mark PR checkouts as trusted in Claude Code, so it doesn't ask. Off by default.
     pub trust_claude_checkouts: bool,
-    /// The gh account prr uses for GitHub; empty: gh's active account.
-    pub github_account: String,
-    /// The gh command prr runs; empty: `gh`, the way your shell runs it.
-    pub gh_command: String,
-    /// The folder gh runs in; empty: the clone prr last opened a PR in.
-    pub gh_folder: String,
-    /// The clone prr last opened a PR in (remembered automatically).
-    pub last_clone: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: false, github_account: String::new(), gh_command: String::new(), gh_folder: String::new(), last_clone: String::new() }
+        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: false }
     }
 }
 
@@ -58,11 +50,6 @@ pub fn load() -> Settings {
 }
 
 impl Settings {
-    /// The folder gh runs in: the one set, or else the last clone.
-    pub fn gh_folder_in_use(&self) -> &str {
-        if self.gh_folder.trim().is_empty() { &self.last_clone } else { &self.gh_folder }
-    }
-
     fn save(&self) {
         let _ = std::fs::create_dir_all(data_dir());
         let tmp = path().with_extension("json.tmp");
@@ -95,9 +82,6 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
 }
 
 fn apply(cx: &mut App) {
-    crate::backend::auth::set_account(&get(cx).github_account);
-    crate::backend::auth::set_gh_command(&get(cx).gh_command);
-    crate::backend::auth::set_folder(get(cx).gh_folder_in_use());
     let size = get(cx).editor_font_size;
     gpui_component::Theme::global_mut(cx).mono_font_size = px(size);
     gpui_component::Theme::sync_base(cx);
@@ -108,18 +92,10 @@ fn apply(cx: &mut App) {
 
 pub enum SettingsEvent {
     Close,
-    /// Another GitHub account was picked: check GitHub access again.
-    GitHubAccountChanged,
 }
 
 pub struct SettingsView {
     agent_command: Entity<InputState>,
-    gh_command: Entity<InputState>,
-    gh_folder: Entity<InputState>,
-    /// The gh command the account list was loaded with.
-    checked_gh: String,
-    /// gh's github.com accounts (None: still loading).
-    accounts: Option<Vec<crate::backend::auth::Account>>,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -140,123 +116,8 @@ impl SettingsView {
                 update(cx, |s| s.agent_command = value);
             }
         });
-        let current_gh = get(cx).gh_command.clone();
-        let gh_command = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder("gh (run like in your terminal)");
-            state.set_value(current_gh, window, cx);
-            state
-        });
-        let gh_sub = cx.subscribe(&gh_command, |this: &mut Self, input, ev: &InputEvent, cx| match ev {
-            InputEvent::Change => {
-                let value = input.read(cx).value().trim().to_string();
-                update(cx, |s| s.gh_command = value);
-            }
-            // Check the new command once it's typed.
-            InputEvent::PressEnter { .. } | InputEvent::Blur => this.gh_changed(cx),
-            _ => {}
-        });
-        let (current_folder, last_clone) = (get(cx).gh_folder.clone(), get(cx).last_clone.clone());
-        let gh_folder = cx.new(|cx| {
-            let placeholder = if last_clone.is_empty() { "Automatic: the clone you last ran prr in".to_string() } else { format!("Automatic: {last_clone}") };
-            let mut state = InputState::new(window, cx).placeholder(placeholder);
-            state.set_value(current_folder, window, cx);
-            state
-        });
-        let folder_sub = cx.subscribe(&gh_folder, |this: &mut Self, input, ev: &InputEvent, cx| match ev {
-            InputEvent::Change => {
-                let value = input.read(cx).value().trim().to_string();
-                update(cx, |s| s.gh_folder = value);
-            }
-            InputEvent::PressEnter { .. } | InputEvent::Blur => this.gh_changed(cx),
-            _ => {}
-        });
-        let mut this = Self { agent_command, gh_command, gh_folder, accounts: None, checked_gh: String::new(), focus: cx.focus_handle(), _subs: vec![sub, gh_sub, folder_sub] };
-        this.checked_gh = gh_key(get(cx));
-        this.load_accounts(cx);
-        this
+        Self { agent_command, focus: cx.focus_handle(), _subs: vec![sub] }
     }
-
-    fn load_accounts(&mut self, cx: &mut Context<Self>) {
-        self.accounts = None;
-        let fut = crate::backend::task(crate::backend::auth::accounts());
-        cx.spawn(async move |this, cx| {
-            let accounts = fut.await;
-            this.update(cx, |this, cx| {
-                this.accounts = Some(accounts);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn gh_changed(&mut self, cx: &mut Context<Self>) {
-        let current = gh_key(get(cx));
-        if current == self.checked_gh {
-            return;
-        }
-        self.checked_gh = current;
-        self.load_accounts(cx);
-        cx.emit(SettingsEvent::GitHubAccountChanged);
-        cx.notify();
-    }
-
-    fn pick_account(&mut self, login: String, cx: &mut Context<Self>) {
-        if get(cx).github_account == login {
-            return;
-        }
-        update(cx, |s| s.github_account = login);
-        cx.emit(SettingsEvent::GitHubAccountChanged);
-    }
-
-    fn render_accounts(&self, picked: &str, cx: &mut Context<Self>) -> AnyElement {
-        let Some(accounts) = &self.accounts else { return ui::muted("Asking gh…").text_size(theme::TEXT_SMALL).into_any_element() };
-        if accounts.is_empty() {
-            return ui::muted("gh isn't logged in to github.com, isn't found, or is too old to list accounts. Run: gh auth login").text_size(theme::TEXT_SMALL).into_any_element();
-        }
-        let active = accounts.iter().find(|a| a.active).map(|a| format!(" (now @{})", a.login)).unwrap_or_default();
-        let mut options: Vec<(String, String, Option<&'static str>)> = vec![(String::new(), format!("gh's active account{active}"), None)];
-        for a in accounts {
-            options.push((a.login.clone(), format!("@{}", a.login), (!a.ok).then_some("gh's token for it has expired: gh auth refresh")));
-        }
-        // An account picked earlier that gh is no longer logged in to.
-        if !picked.is_empty() && !accounts.iter().any(|a| a.login == picked) {
-            options.push((picked.to_string(), format!("@{picked}"), Some("gh isn't logged in to it any more")));
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.))
-            .children(options.into_iter().enumerate().map(|(i, (login, label, warning))| {
-                let selected = login == picked;
-                div()
-                    .id(("gh-account", i))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick_account(login.clone(), cx)))
-                    .child(
-                        div()
-                            .size(px(14.))
-                            .rounded_full()
-                            .border_1()
-                            .border_color(hsla(if selected { theme::ACCENT } else { theme::MUTED }))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when(selected, |el| el.child(div().size(px(6.)).rounded_full().bg(hsla(theme::ACCENT)))),
-                    )
-                    .child(label)
-                    .children(warning.map(|w| div().text_size(theme::TEXT_SMALL).text_color(hsla(theme::WARN)).child(w)))
-            }))
-            .into_any_element()
-    }
-}
-
-/// What decides which gh runs, and where: a change means checking GitHub access again.
-fn gh_key(s: &Settings) -> String {
-    format!("{}\n{}", s.gh_command, s.gh_folder_in_use())
 }
 
 fn stepper(id: &'static str, value: f32, (default, min, max): (f32, f32, f32), set: fn(&mut Settings, f32), cx: &mut Context<SettingsView>) -> impl IntoElement {
@@ -298,8 +159,6 @@ impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.focus.contains_focused(window, cx)
             && !self.agent_command.read(cx).focus_handle(cx).is_focused(window)
-            && !self.gh_command.read(cx).focus_handle(cx).is_focused(window)
-            && !self.gh_folder.read(cx).focus_handle(cx).is_focused(window)
         {
             window.focus(&self.focus, cx);
         }
@@ -351,36 +210,6 @@ impl Render for SettingsView {
                             .child(div().flex_1().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("Settings"))
                             .child(ui::link("settings-close", "✕").on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::Close)))),
                     )
-                    .child(row(
-                        "GitHub account",
-                        Some("prr uses the GitHub CLI's login. Log in to more accounts with gh auth login."),
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.))
-                            .child(self.render_accounts(&s.github_account, cx))
-                            .child(ui::muted("Used for GitHub and for prr's own clones. Your gh and git settings don't change.").text_size(theme::TEXT_SMALL)),
-                    ))
-                    .child(row(
-                        "gh command",
-                        Some("Leave empty to run gh the way your terminal does."),
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.))
-                            .child(Input::new(&self.gh_command))
-                            .child(ui::muted("prr runs gh through your login shell, so a wrapper function or alias around gh (one that sets a company token, say) is used too. Set a path (/usr/local/bin/corp-gh) or another command name to run that instead. Press Enter to check it.").text_size(theme::TEXT_SMALL)),
-                    ))
-                    .child(row(
-                        "Run gh in",
-                        Some("A clone of the repo you review."),
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.))
-                            .child(Input::new(&self.gh_folder))
-                            .child(ui::muted("gh runs as if you had cd'd into this folder in a terminal, so whatever sets its environment there (direnv, mise, your company's per-repo settings) applies. Leave empty to use the clone you last ran prr in. Press Enter to check it.").text_size(theme::TEXT_SMALL)),
-                    ))
                     .child(row(
                         "Agent command",
                         Some("Runs in the agent panel, in the PR's checkout. Leave empty for Claude Code."),

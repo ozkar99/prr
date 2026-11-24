@@ -78,7 +78,10 @@ impl Review {
             Ok(h) => h,
             Err(e) => return Task::ready(Err(e)),
         };
-        let fut = backend::task(op(handle, self.head_sha.clone()));
+        let (owner, repo) = (self.owner.clone(), self.repo.clone());
+        let change = op(handle, self.head_sha.clone());
+        // gh runs from this repo's clone.
+        let fut = backend::task(async move { backend::gh::in_repo(&owner, &repo, change).await });
         cx.spawn(async move |this, cx| {
             let result = fut.await;
             this.update(cx, |this, cx| this.load(cx)).ok();

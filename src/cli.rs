@@ -29,9 +29,10 @@ fn git(args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 
-/// "owner/repo" from a GitHub remote URL (https, ssh, or scp-style).
+/// "owner/repo" from a remote URL (https, ssh, or scp-style), whatever the
+/// host: a company may serve its GitHub repos from an internal git host.
 fn github_repo(url: &str) -> Option<(String, String)> {
-    let re = regex::Regex::new(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$").unwrap();
+    let re = regex::Regex::new(r"[:/]([^/:\s]+)/([^/\s]+?)(?:\.git)?/?$").unwrap();
     let c = re.captures(url.trim())?;
     Some((c[1].to_string(), c[2].to_string()))
 }
@@ -60,11 +61,10 @@ fn current_branch_pr() -> Option<String> {
         }
         None => (Some(owner.clone()), git(&["symbolic-ref", "--short", "-q", "HEAD"])),
     };
-    let settings = crate::settings::load();
-    crate::backend::auth::set_account(&settings.github_account);
-    crate::backend::auth::set_gh_command(&settings.gh_command);
-    // In a clone, gh runs right here, like typing it in this terminal.
-    crate::backend::auth::set_folder(&git(&["rev-parse", "--show-toplevel"]).unwrap_or_else(|| settings.gh_folder_in_use().to_string()));
+    // gh runs right here, like typing it in this terminal.
+    if let Some(top) = git(&["rev-parse", "--show-toplevel"]) {
+        crate::backend::gh::run_in(&top);
+    }
     crate::backend::block_on(crate::backend::github::pr_for_branch(&owner, &repo, head_owner.as_deref(), branch.as_deref(), sha.as_deref())).ok().flatten()
 }
 
@@ -176,6 +176,8 @@ mod tests {
         assert_eq!(github_repo("https://github.com/ozkar99/prr"), want);
         assert_eq!(github_repo("git@github.com:ozkar99/prr.git"), want);
         assert_eq!(github_repo("ssh://git@github.com/ozkar99/prr.git"), want);
-        assert_eq!(github_repo("https://gitlab.com/ozkar99/prr.git"), None);
+        assert_eq!(github_repo("git@git.corp.internal:ozkar99/prr.git"), want, "an internal git host");
+        assert_eq!(github_repo("ssh://git@git.corp.internal:7999/scm/ozkar99/prr.git"), want);
+        assert_eq!(github_repo("prr"), None);
     }
 }

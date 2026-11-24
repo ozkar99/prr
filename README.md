@@ -33,21 +33,21 @@ installs the GitHub CLI (`gh`) and Node.js if you don't have them.
 
 ### GitHub access
 
-prr has no login of its own: it uses the [GitHub CLI](https://cli.github.com)'s. If gh is logged
-in to more than one github.com account (`gh auth login` again adds another, e.g. a work account
-next to a personal one), pick the one prr uses in **Settings → GitHub account**. By default it's
-gh's active account. prr's own clones use the same account over HTTPS, so SSH keys aren't needed,
-and your gh and git settings aren't changed.
+prr has no login of its own and holds no token: everything it asks GitHub (pull requests, files,
+comments, reviews) goes through the [GitHub CLI](https://cli.github.com) as `gh api …`, run exactly
+as if you typed it in a terminal:
 
-prr runs `gh` the way your terminal does, through your login shell, so if your company wraps `gh`
-in a shell function or alias (to set a company token, for example), prr uses the wrapper too. To run
-something else, set **Settings → gh command** to a path (`/usr/local/bin/corp-gh`) or a command
-name.
+- through your login shell, so if your company wraps `gh` in a shell function or alias (to set a
+  company token, say), prr uses the wrapper too;
+- inside a clone of the PR's repo, as if you had `cd`'d into it, so whatever sets up `gh` there
+  (direnv, mise, per-repo company settings) applies too. That's the clone you run `prr` in, which
+  prr remembers for that repo; for anything else it uses the clone you used last.
 
-It also runs `gh` inside a clone of your repo, as if you had `cd`'d into it, so anything that sets
-`gh`'s environment there (direnv, mise, per-repo company settings) applies too. That's the clone you
-last ran `prr` in (the `prr` command uses the clone you run it from), or the folder set in
-**Settings → Run gh in**.
+If `gh api user` works in your terminal inside the repo, prr works. A clone whose remote is an
+internal git host (`git@git.corp.internal:org/repo.git`) counts as a clone of `github.com/org/repo`;
+if that host doesn't have GitHub's pull request refs, prr fetches the PR from GitHub. prr's own
+checkouts (for PRs you open outside a clone) download over HTTPS with your git credentials, or
+through gh if git has none.
 
 ### Language servers
 
@@ -296,7 +296,7 @@ The sidebar's width, the diff's split and the agent panel's height are remembere
 
 | Problem | Fix |
 |---|---|
-| "Couldn't load pull requests" | Check `gh auth status`; run `gh auth refresh -h github.com` if the token is invalid. If gh has several accounts, check which one Settings → GitHub account uses. |
+| "Couldn't load pull requests" | Run `gh api user` in a terminal inside your clone: prr runs exactly that. Fix it there (`gh auth login`, your company's setup) and click **Check again**. |
 | A server chip says **not installed** | Install it (hover the chip for the command), then reopen the PR. |
 | A server chip says **failed** | Hover it to see the error. |
 | C++ types are wrong or headers don't resolve | clangd needs `compile_commands.json` (below). |

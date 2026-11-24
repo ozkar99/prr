@@ -16,14 +16,14 @@ pub fn bare_repo_path(owner: &str, repo: &str) -> PathBuf {
 }
 
 async fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
-    // With the GitHub token, for anything that downloads (see auth::git_env).
+    // git signs in to github.com through gh (see gh::git_env), for anything that downloads.
     let mut env: Vec<(String, String)> = vec![("GIT_TERMINAL_PROMPT".into(), "0".into())];
-    env.extend(crate::backend::auth::git_env().await);
+    env.extend(crate::backend::gh::git_env());
     let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     run("git", args, cwd, &env).await
 }
 
-/// Clones are over HTTPS, authenticated with the same token as the API.
+/// prr's own clones are over HTTPS; git signs in through gh.
 async fn remote_url(owner: &str, repo: &str) -> String {
     format!("https://github.com/{owner}/{repo}.git")
 }
@@ -52,7 +52,8 @@ pub async fn checkout(
 
 // ---- The user's own clone ----
 
-/// The remote in `repo` that points at github.com/<owner>/<name>, if any.
+/// The remote in `repo` that points at <owner>/<name> (on github.com or an
+/// internal mirror of it), if any.
 async fn matching_remote(repo: &Path, owner: &str, name: &str) -> Option<String> {
     let remotes = git(&["remote", "-v"], Some(repo)).await.ok()?;
     let wanted = format!("{owner}/{name}").to_lowercase();
@@ -60,7 +61,8 @@ async fn matching_remote(repo: &Path, owner: &str, name: &str) -> Option<String>
         let mut parts = line.split_whitespace();
         let (remote, url) = (parts.next()?, parts.next()?);
         let path = url.trim_end_matches(".git").to_lowercase();
-        (path.contains("github.com") && (path.ends_with(&format!("/{wanted}")) || path.ends_with(&format!(":{wanted}"))))
+        // Any host: a company may serve its GitHub repos from an internal git host.
+        (path.ends_with(&format!("/{wanted}")) || path.ends_with(&format!(":{wanted}")))
             .then(|| remote.to_string())
     })
 }
@@ -72,13 +74,25 @@ async fn fetch_into_clone(pr: &PRDetails, repo: &Path, progress: &impl Fn(String
     let top = git(&["rev-parse", "--show-toplevel"], Some(repo)).await.map_err(|_| format!("{} isn't a git clone", repo.display()))?;
     let top = PathBuf::from(top.trim());
     progress(format!("Fetching PR #{} into your clone…", pr.number));
-    let remote = match matching_remote(&top, &pr.owner, &pr.repo).await {
-        Some(r) => r,
-        None => remote_url(&pr.owner, &pr.repo).await,
-    };
     let pr_ref = format!("refs/pull/{}/head", pr.number);
     let base_ref = format!("refs/heads/{}", pr.base_ref);
-    git(&["fetch", "--no-tags", "--no-write-fetch-head", &remote, &pr_ref, &base_ref], Some(&top)).await?;
+    let github = remote_url(&pr.owner, &pr.repo).await;
+    let fetch = |remote: String| {
+        let (top, pr_ref, base_ref) = (top.clone(), pr_ref.clone(), base_ref.clone());
+        async move { git(&["fetch", "--no-tags", "--no-write-fetch-head", &remote, &pr_ref, &base_ref], Some(&top)).await }
+    };
+    match matching_remote(&top, &pr.owner, &pr.repo).await {
+        // The clone's own remote (its credentials, possibly an internal mirror); a
+        // mirror may not carry GitHub's pull/<n>/head refs, so fall back to GitHub.
+        Some(remote) => {
+            if let Err(first) = fetch(remote.clone()).await
+                && let Err(second) = fetch(github).await
+            {
+                return Err(format!("Couldn't fetch PR #{} from your remote \"{remote}\" ({first}) or from GitHub ({second})", pr.number));
+            }
+        }
+        None => fetch(github).await.map(|_| ())?,
+    }
     let merge_base = git(&["merge-base", &pr.base_sha, &pr.head_sha], Some(&top)).await?.trim().to_string();
     Ok((top, merge_base))
 }

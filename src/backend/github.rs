@@ -1,52 +1,17 @@
 //! GitHub API: REST for PR data, GraphQL for reviews (the only API with pending reviews and threads).
-use crate::backend::auth;
+use crate::backend::gh;
 use crate::backend::types::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::Mutex;
 
-static CLIENT: OnceCell<reqwest::Client> = OnceCell::const_new();
-
-async fn client() -> Result<&'static reqwest::Client, String> {
-    CLIENT
-        .get_or_try_init(|| async {
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert("Accept", "application/vnd.github+json".parse().unwrap());
-            headers.insert("X-GitHub-Api-Version", "2022-11-28".parse().unwrap());
-            reqwest::Client::builder()
-                .user_agent("prr")
-                .default_headers(headers)
-                .build()
-                .map_err(|e| e.to_string())
-        })
-        .await
-}
-
-/// Sends a request with gh's token (see `auth`).
-async fn send(req: reqwest::RequestBuilder) -> Result<reqwest::Response, String> {
-    let token = auth::token().await?;
-    let res = req.bearer_auth(&token.value).send().await.map_err(|e| e.to_string())?;
-    if res.status() == reqwest::StatusCode::UNAUTHORIZED {
-        auth::forget().await;
-        let who = token.account.map(|a| format!(" for @{a}")).unwrap_or_default();
-        return Err(format!("GitHub rejected gh's token{who}. Run: gh auth refresh -h github.com"));
-    }
-    Ok(res)
-}
-
+/// A REST call through `gh api` (see `gh`).
 async fn rest(path: &str) -> Result<Value, String> {
-    let res = send(client().await?.get(format!("https://api.github.com{path}"))).await?;
-    let status = res.status();
-    let body: Value = res.json().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(format!("GitHub {status}: {}", body["message"].as_str().unwrap_or("request failed")));
-    }
-    Ok(body)
+    gh::api(path, None).await
 }
 
 async fn graphql(query: &str, variables: Value) -> Result<Value, String> {
-    let res = send(client().await?.post("https://api.github.com/graphql").json(&json!({ "query": query, "variables": variables }))).await?;
-    let body: Value = res.json().await.map_err(|e| e.to_string())?;
+    let body = gh::api("graphql", Some(&json!({ "query": query, "variables": variables }))).await?;
     if let Some(errors) = body["errors"].as_array().filter(|e| !e.is_empty()) {
         let msgs: Vec<&str> = errors.iter().filter_map(|e| e["message"].as_str()).collect();
         return Err(msgs.join("; "));
@@ -137,6 +102,10 @@ fn commentable_ranges(patch: &str) -> CommentableRanges {
 }
 
 pub async fn get_pr(owner: &str, repo: &str, number: u64) -> Result<PRDetails, String> {
+    gh::in_repo(owner, repo, get_pr_inner(owner, repo, number)).await
+}
+
+async fn get_pr_inner(owner: &str, repo: &str, number: u64) -> Result<PRDetails, String> {
     let pr = rest(&format!("/repos/{owner}/{repo}/pulls/{number}")).await?;
     let mut files = Vec::new();
     // GitHub caps this listing at 3000 files.
@@ -224,6 +193,10 @@ fn to_conversation_item(kind: &str, c: &Value) -> ConversationItem {
 static PENDING_REVIEWS: Mutex<Option<HashMap<String, String>>> = Mutex::const_new(None);
 
 pub async fn review_state(owner: &str, repo: &str, number: u64) -> Result<ReviewState, String> {
+    gh::in_repo(owner, repo, review_state_inner(owner, repo, number)).await
+}
+
+async fn review_state_inner(owner: &str, repo: &str, number: u64) -> Result<ReviewState, String> {
     let mut threads = Vec::new();
     let mut after: Option<String> = None;
     let mut base: Option<(String, String, Option<String>, Vec<ConversationItem>)> = None;
