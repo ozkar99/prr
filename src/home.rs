@@ -33,6 +33,8 @@ pub struct Home {
     error: Option<String>,
     notice: Option<String>,
     pending_switch: Option<PendingSwitch>,
+    /// When the PR being opened was asked for (for the timings log).
+    open_started: Option<(std::time::Instant, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -73,6 +75,7 @@ impl Home {
             error: None,
             notice: None,
             pending_switch: None,
+            open_started: None,
             _subscriptions: vec![subscription],
         }
         // The tool check and the PR lists load when the home screen is shown
@@ -176,7 +179,11 @@ impl Home {
         self.error = None;
         self.busy = Some(format!("Loading {owner}/{repo}#{number}…"));
         cx.notify();
+        let started = std::time::Instant::now();
+        let label = format!("{owner}/{repo}#{number}");
+        backend::exec::log_timing(&format!("== opening {label}"), started);
         let fut = backend::task(async move { github::get_pr(&owner, &repo, number).await });
+        self.open_started = Some((started, label));
         cx.spawn(async move |this, cx| match fut.await {
             Ok(pr) => {
                 // In your clone: straight onto a prr/pr-<n> branch, no question asked.
@@ -223,6 +230,9 @@ impl Home {
                 this.busy = None;
                 match result {
                     Ok(CheckoutResult::Ready(checkout)) => {
+                        if let Some((started, label)) = this.open_started.take() {
+                            backend::exec::log_timing(&format!("== opened {label} (total, from asking GitHub to checked out)"), started);
+                        }
                         cx.emit(HomeEvent::Opened { pr, checkout });
                     }
                     Ok(CheckoutResult::NeedsSwitch { path, current, dirty }) => {

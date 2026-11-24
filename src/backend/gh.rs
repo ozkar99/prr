@@ -99,6 +99,13 @@ pub struct Output {
 
 /// Runs gh with `args` (and `input` on stdin) from the repo's clone.
 pub async fn run(args: &[&str], input: Option<&[u8]>) -> Result<Output, String> {
+    let started = std::time::Instant::now();
+    let result = run_inner(args, input).await;
+    crate::backend::exec::log_timing(&format!("gh {} (through the shell)", args.join(" ")), started);
+    result
+}
+
+async fn run_inner(args: &[&str], input: Option<&[u8]>) -> Result<Output, String> {
     let (shell, full) = invocation(args);
     let home = std::env::var("HOME").unwrap_or("/".into());
     let mut command = tokio::process::Command::new(&shell);

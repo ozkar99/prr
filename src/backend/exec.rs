@@ -40,8 +40,36 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Where step timings go: ~/Library/Application Support/review-tool/timings.log.
+pub fn timings_path() -> PathBuf {
+    data_dir().join("timings.log")
+}
+
+/// Appends "time  1.23s  what" to the timings log (to find what's slow).
+pub fn log_timing(what: &str, started: std::time::Instant) {
+    use std::io::Write;
+    let path = timings_path();
+    // Keep it small: start over past 1 MB.
+    if std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let what: String = what.chars().take(160).collect();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (h, m, sec) = ((now / 3600) % 24, (now / 60) % 60, now % 60);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{h:02}:{m:02}:{sec:02} UTC  {:>6.2}s  {what}", started.elapsed().as_secs_f64());
+    }
+}
+
 /// Runs a command and returns its stdout; the error carries stderr.
 pub async fn run(cmd: &str, args: &[&str], cwd: Option<&Path>, env: &[(&str, &str)]) -> Result<String, String> {
+    let started = std::time::Instant::now();
+    let result = run_inner(cmd, args, cwd, env).await;
+    log_timing(&format!("{cmd} {}", args.join(" ")), started);
+    result
+}
+
+async fn run_inner(cmd: &str, args: &[&str], cwd: Option<&Path>, env: &[(&str, &str)]) -> Result<String, String> {
     let mut c = Command::new(cmd);
     c.args(args);
     if let Some(dir) = cwd {

@@ -303,6 +303,7 @@ The sidebar's width, the diff's split and the agent panel's height are remembere
 
 | Problem | Fix |
 |---|---|
+| Opening a PR is slow | Every `gh` and `git` step prr runs is timed in `~/Library/Application Support/review-tool/timings.log` (with a line per PR opened); the slow lines say where the time goes. |
 | "Couldn't load pull requests" | Run `gh api user` in a terminal inside your clone: prr runs exactly that. Fix it there (`gh auth login`, your company's setup) and click **Check again**. |
 | A server chip says **not installed** | Install it (hover the chip for the command), then reopen the PR. |
 | A server chip says **failed** | Hover it to see the error. |
