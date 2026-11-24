@@ -1,19 +1,12 @@
-//! Getting a PR's code onto disk, two ways:
-//!
-//! - **The user's own clone** (when `prr` runs inside a clone of the
-//!   PR's repo): the PR's commits are fetched into it without creating refs,
-//!   and it's switched to the PR head only with the user's OK. No extra clone,
-//!   and its language-server caches are reused. Big repos stay cheap.
-//! - **App-managed**: one shared bare clone per repo plus one worktree per PR.
-//!   Worktrees not opened for a while are removed by cleanup.rs.
-use crate::backend::exec::{clone_worktrees_dir, data_dir, run, worktrees_dir};
+//! Getting a PR's code onto disk, always in the user's own clone (`prr`
+//! runs inside it): the PR's commits are fetched into it, and it's switched to
+//! a branch of its own (prr/pr-<n>). When the clone has uncommitted changes, or
+//! another window uses it, the PR gets a copy-on-write worktree of it instead.
+//! prr never downloads a repository itself.
+use crate::backend::exec::{clone_worktrees_dir, run};
 use crate::backend::types::{Checkout, CheckoutResult, LocalClone, PRDetails};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
-pub fn bare_repo_path(owner: &str, repo: &str) -> PathBuf {
-    data_dir().join("repos").join(owner).join(format!("{repo}.git"))
-}
 
 async fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     // git signs in to github.com through gh (see gh::git_env), for anything that downloads.
@@ -43,14 +36,6 @@ pub async fn checkout(
     allow_switch: bool,
     progress: impl Fn(String),
 ) -> Result<CheckoutResult, String> {
-    // Not run inside a clone (opened from the home screen, a link, another
-    // folder): a clone prr has reviewed this repo in before still beats a new
-    // copy. Its copy-on-write worktree leaves the clone itself alone.
-    if local_repo.is_none()
-        && let Some(clone) = crate::backend::gh::clone_for(&pr.owner, &pr.repo)
-    {
-        return checkout_clone_worktree(pr, Path::new(&clone), progress).await.map(CheckoutResult::Ready);
-    }
     match local_repo {
         Some(path) if local_worktree => checkout_clone_worktree(pr, Path::new(path), progress).await.map(CheckoutResult::Ready),
         Some(path) => match checkout_local(pr, Path::new(path), allow_switch, &progress).await? {
@@ -59,7 +44,11 @@ pub async fn checkout(
             CheckoutResult::NeedsSwitch { dirty: true, .. } => checkout_clone_worktree(pr, Path::new(path), progress).await.map(CheckoutResult::Ready),
             other => Ok(other),
         },
-        None => checkout_managed(pr, progress).await.map(CheckoutResult::Ready),
+        // prr only reviews in your own clone (run `prr` inside it).
+        None => Err(format!(
+            "prr reviews pull requests in your own clone. In a terminal, inside your clone of {}/{}: prr {}",
+            pr.owner, pr.repo, pr.url
+        )),
     }
 }
 
@@ -223,56 +212,7 @@ pub async fn delete_pr_branch(path: &str, branch: &str, head_sha: &str) -> bool 
 
 // ---- App-managed clone + worktrees ----
 
-/// Above this (KB, as GitHub reports a repository's size), prr won't make its own copy.
-const LARGE_REPO_KB: u64 = 2_000_000;
 
-async fn checkout_managed(pr: &PRDetails, progress: impl Fn(String)) -> Result<Checkout, String> {
-    let bare = bare_repo_path(&pr.owner, &pr.repo);
-    let bare_s = bare.to_string_lossy().to_string();
-    if !bare.exists() {
-        // Never download a huge repository unasked: a monorepo belongs in the
-        // user's own clone.
-        if let Ok(kb) = crate::backend::github::repo_size_kb(&pr.owner, &pr.repo).await
-            && kb > LARGE_REPO_KB
-        {
-            return Err(format!(
-                "{}/{} is about {:.1} GB, too big for prr to download a copy of. Run prr inside your clone of it instead: cd <your clone> && prr {}",
-                pr.owner,
-                pr.repo,
-                kb as f64 / 1_000_000.0,
-                pr.url
-            ));
-        }
-        progress(format!("Cloning {}/{} (first time only)…", pr.owner, pr.repo));
-        tokio::fs::create_dir_all(bare.parent().unwrap()).await.map_err(|e| e.to_string())?;
-        // Blobless: history without file contents; contents arrive when checked out.
-        // Keeps the first clone of a big repo fast.
-        git(&["clone", "--bare", "--no-tags", "--filter=blob:none", &remote_url(&pr.owner, &pr.repo).await, &bare_s], None).await?;
-    }
-
-    progress(format!("Fetching PR #{}…", pr.number));
-    let pr_ref = format!("+refs/pull/{}/head:refs/review/pr/{}", pr.number, pr.number);
-    let base_ref = format!("+refs/heads/{}:refs/review/base/{}", pr.base_ref, pr.base_ref);
-    git(&["fetch", "--no-tags", "origin", &pr_ref, &base_ref], Some(&bare)).await?;
-
-    let merge_base = git(&["merge-base", &pr.base_sha, &pr.head_sha], Some(&bare)).await?.trim().to_string();
-
-    let root = worktrees_dir().join(&pr.owner).join(&pr.repo).join(format!("pr-{}", pr.number));
-    let root_s = root.to_string_lossy().to_string();
-    progress("Checking out PR head…".into());
-    if root.join(".git").exists() {
-        git(&["checkout", "--detach", "--force", &pr.head_sha], Some(&root)).await?;
-    } else {
-        git(&["worktree", "prune"], Some(&bare)).await?;
-        tokio::fs::create_dir_all(root.parent().unwrap()).await.map_err(|e| e.to_string())?;
-        git(&["worktree", "add", "--detach", "--force", &root_s, &pr.head_sha], Some(&bare)).await?;
-    }
-    // Last-opened time, for cleanup of unused worktrees.
-    if let Ok(dir) = std::fs::File::open(&root) {
-        let _ = dir.set_modified(SystemTime::now());
-    }
-    Ok(Checkout { root: root_s, merge_base, head_sha: pr.head_sha.clone(), local: None, worktree_of: None })
-}
 
 // ---- Worktrees of the user's clone (copy-on-write) ----
 

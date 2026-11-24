@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 
 const USAGE: &str = "Usage: prr [PR]
 
-Opens a GitHub pull request in prr.
+Opens a GitHub pull request in prr, in your clone of its repository: run it inside the clone.
 
 PR can be:
   https://github.com/owner/repo/pull/123   a PR URL
@@ -15,6 +15,7 @@ PR can be:
   (nothing)                                the PR for the current branch, or just open the app
 
 Options:
+  --here           review in this clone even if its remotes don't name the PR's repo
   -h, --help       show this help
   -v, --version    show the version";
 
@@ -153,12 +154,29 @@ pub fn handle(args: &[String]) -> bool {
         println!("{USAGE}");
         return true;
     }
+    // --here: use the current clone even if its remotes don't name the PR's repo.
+    let here = user_args.iter().any(|a| *a == "--here");
+    let user_args: Vec<&str> = user_args.into_iter().filter(|a| *a != "--here").collect();
     if user_args.len() > 1 {
         fail(USAGE);
     }
 
     let url = resolve_pr(user_args.first().copied());
-    let local = url.as_deref().and_then(local_clone_for);
+    let local = match &url {
+        None => None,
+        Some(u) => Some(match (local_clone_for(u), git(&["rev-parse", "--show-toplevel"])) {
+            (Some(path), _) => path,
+            // A clone whose remotes don't name this repo: only on request.
+            (None, Some(top)) if here => top,
+            (None, Some(top)) => fail(&format!(
+                "{top} doesn't look like a clone of {} (none of its remotes ends in that repo's name). cd into your clone of it, or if this is it, run: prr --here {u}",
+                crate::backend::types::parse_pr_ref(u).map(|r| format!("{}/{}", r.owner, r.repo)).unwrap_or_default()
+            )),
+            (None, None) => fail(&format!(
+                "prr reviews pull requests in your own clone of the repository. cd into it and run: prr {u}"
+            )),
+        }),
+    };
     let mut pr_args: Vec<String> = url.iter().map(|u| format!("--open-pr={u}")).collect();
     if let Some(path) = &local {
         pr_args.push(format!("--local-repo={path}"));

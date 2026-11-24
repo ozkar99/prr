@@ -42,11 +42,6 @@ pub fn remember_clone(owner: &str, repo: &str, path: &str) {
     let _ = std::fs::write(clones_path(), serde_json::to_vec_pretty(&all).unwrap_or_default());
 }
 
-/// The clone prr remembers for `owner/repo` (prr was run inside it), if it still exists.
-pub fn clone_for(owner: &str, repo: &str) -> Option<String> {
-    clones().get(&format!("{owner}/{repo}").to_lowercase()).cloned().filter(|p| std::path::Path::new(p).join(".git").exists())
-}
-
 /// The GitHub repo prr remembers for a clone (from a PR opened in it).
 pub fn repo_of_clone(path: &str) -> Option<(String, String)> {
     clones().into_iter().find(|(k, v)| !k.is_empty() && v == path).and_then(|(k, _)| k.split_once('/').map(|(o, r)| (o.to_string(), r.to_string())))
