@@ -93,6 +93,8 @@ pub struct LocalClone {
     pub path: String,
     /// The branch (or commit) the clone was on before switching to the PR, to restore on close.
     pub switched_from: Option<String>,
+    /// The branch prr made for the PR (prr/pr-<n>), when it switched the clone.
+    pub pr_branch: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]

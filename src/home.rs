@@ -338,9 +338,11 @@ impl Home {
                 .child(ui::code(p.path.clone()))
                 .child("is on")
                 .child(ui::code(p.current.clone()))
-                .child(format!(". Switch it to PR #{number} to review it there? It switches back to"))
+                .child(format!(". Switch it to a new branch"))
+                .child(ui::code(format!("prr/pr-{number}")))
+                .child(format!("at PR #{number} to review it there? It switches back to"))
                 .child(ui::code(p.current.clone()))
-                .child("when you close the PR.")
+                .child("when you close the PR; the branch stays.")
         };
         let (p1, p2, p3) = (p.clone(), p.clone(), p.clone());
         Some(
