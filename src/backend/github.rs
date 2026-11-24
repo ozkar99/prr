@@ -19,12 +19,6 @@ async fn graphql(query: &str, variables: Value) -> Result<Value, String> {
     Ok(body["data"].clone())
 }
 
-/// The repository's size on GitHub, in KB (roughly what a clone downloads).
-pub async fn repo_size_kb(owner: &str, repo: &str) -> Result<u64, String> {
-    let r = gh::in_repo(owner, repo, rest(&format!("/repos/{owner}/{repo}"))).await?;
-    Ok(r["size"].as_u64().unwrap_or(0))
-}
-
 /// Whether a PR was merged or closed (false when GitHub can't say).
 pub async fn pr_is_done(owner: &str, repo: &str, number: u64) -> bool {
     gh::in_repo(owner, repo, rest(&format!("/repos/{owner}/{repo}/pulls/{number}"))).await.map(|p| p["state"] == "closed").unwrap_or(false)
@@ -64,39 +58,6 @@ fn urlencode(s: &str) -> String {
 
 fn s(v: &Value) -> String {
     v.as_str().unwrap_or_default().to_string()
-}
-
-/// One page of the home screen's PR lists: `reason` is "review-requested"
-/// or "authored". The PRs on that page and how many there are in all.
-pub async fn review_queue_page(reason: &str, page: u32, per_page: u32) -> Result<(Vec<PRSummary>, u64), String> {
-    let q = match reason {
-        "review-requested" => "is:pr is:open archived:false review-requested:@me",
-        _ => "is:pr is:open archived:false author:@me",
-    };
-    let q = q.replace(' ', "+").replace(':', "%3A").replace('@', "%40");
-    let data = rest(&format!("/search/issues?q={q}&sort=updated&per_page={per_page}&page={page}")).await?;
-    let items = data["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|item| {
-            let repo_url = s(&item["repository_url"]);
-            let mut parts = repo_url.rsplit('/');
-            let repo = parts.next().unwrap_or_default().to_string();
-            let owner = parts.next().unwrap_or_default().to_string();
-            PRSummary {
-                owner,
-                repo,
-                number: item["number"].as_u64().unwrap_or_default(),
-                title: s(&item["title"]),
-                author: s(&item["user"]["login"]),
-                updated_at: s(&item["updated_at"]),
-                draft: item["draft"].as_bool().unwrap_or(false),
-                reason: reason.into(),
-            }
-        })
-        .collect();
-    Ok((items, data["total_count"].as_u64().unwrap_or(0)))
 }
 
 /// Line ranges per side from the unified diff's hunk headers (`@@ -a,b +c,d @@`).

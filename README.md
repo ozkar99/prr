@@ -1,7 +1,8 @@
 # prr
 
 prr (pronounced "purr") is a macOS app for reviewing GitHub pull requests with real code
-intelligence. It checks out the PR, runs each language's own server against it (gopls, clangd,
+intelligence. Run `prr <PR>` inside your clone of the repository: it checks out the PR there,
+runs each language's own server against it (gopls, clangd,
 pyright, starpls, bash-language-server), and shows a side-by-side diff of the whole file: hover
 for types and docs, go to definition, peek, find references. Comments, replies and reviews go straight to
 GitHub, and a coding agent (Claude Code by default) sits in a panel below the code, ready to
@@ -128,16 +129,22 @@ Changes apply to PRs you open afterwards. Mistakes in the file show in the home 
 
 ## Opening PRs
 
+prr reviews pull requests in **your own clone** of the repository, opened from a terminal inside it:
+
 ```sh
+cd ~/src/your-repo
 prr https://github.com/owner/repo/pull/123   # a PR URL
 prr owner/repo#123                           # a PR reference
-prr 123                                      # inside a clone: PR #123 of that repo
-prr                                          # inside a clone: the PR for your current branch
+prr 123                                      # PR #123 of this clone's repo
+prr                                          # the PR for your current branch
+prr --here <PR>                              # this clone, even if its remotes don't name the repo
 prr --version                                # the installed version (-v); --help for usage
 ```
 
-Or open the app and pick a PR from **Review requested** / **Your pull requests**, or paste a URL
-or `owner/repo#123`.
+Outside a clone of the PR's repository, `prr` says so and opens nothing. A clone counts when one of
+its remotes ends in the repository's name (any host, so an internal mirror works); if yours
+doesn't, `--here` uses it anyway, and prr remembers it for that repository (so `prr 123` works
+there afterwards). The app's home screen just checks your setup; it doesn't open PRs.
 
 Each PR gets its own window, so you can review several at once. Opening a PR that's already open
 brings its window forward; a window on the home screen is reused. Each window has its own
@@ -146,24 +153,20 @@ opens a new window, **⌘`** switches windows, and the app quits with its last w
 
 ### Where the code comes from
 
-- **Inside your own clone of the PR's repo**, `prr` reviews the PR right there: no second
-  copy, and your language-server caches are reused. The window goes straight to the PR (no
-  questions, and the home screen's PR lists aren't loaded). If the clone isn't already at the PR,
-  it switches it to a branch of its own, `prr/pr-<number>`, at the PR's head (never a
-  detached HEAD, and never your branches). When you close the PR it switches back to the branch
-  you were on, if the clone is still on `prr/pr-<number>` with no uncommitted changes. The PR
-  branch stays, with anything you committed on it; if it has commits of yours, a later review of
-  that PR uses `prr/pr-<number>-<commit>` instead of touching them. It never switches a clone with
-  uncommitted changes: then the PR opens in a copy-on-write copy of the clone (below) instead.
-- **Opened some other way** (the home screen, a link, `prr` outside the clone): if prr has
-  reviewed that repo in your clone before, it uses a copy-on-write copy of that clone (below)
-  instead of downloading the repository. It never downloads a repository bigger than about 2 GB
-  on its own: run `prr` inside your clone of it instead.
-- **More PRs from the same clone** (another window is using it), or a clone with uncommitted
-  changes: the PR gets a `git worktree` of your clone whose files are copy-on-write copies of your
-  checkout. It shares the clone's objects and only costs disk for the files that differ, so
-  several PRs of a large monorepo stay cheap. It shows in `git worktree list`, and it stays when
-  you close the window, so reopening the PR is quick.
+prr never downloads a repository itself.
+
+- **In your clone:** the window goes straight to the PR, with no questions. If the clone isn't
+  already at the PR, prr fetches the PR's commits (only the missing ones) and switches it to a
+  branch of its own, `prr/pr-<number>`, at the PR's head (never a detached HEAD, and never your
+  branches). When you close the PR it switches back to the branch you were on, if the clone is
+  still on `prr/pr-<number>` with no uncommitted changes. The PR branch stays, with anything you
+  committed on it; if it has commits of yours, a later review of that PR uses
+  `prr/pr-<number>-<commit>` instead of touching them.
+- **A clone with uncommitted changes, or more PRs from the same clone** (another window is using
+  it): the PR gets a `git worktree` of your clone whose files are copy-on-write copies of your
+  checkout, and your clone isn't switched. It shares the clone's objects and only costs disk for
+  the files that differ, so several PRs of a large monorepo stay cheap. It shows in
+  `git worktree list`.
 
 **Reopening a PR is cheap.** Closing a PR keeps what it needs: its `prr/pr-<number>` branch or its
 copy of your clone, and its language servers keep running in the background for 15 minutes, so
@@ -171,12 +174,10 @@ gopls doesn't load a monorepo again when you come back to the same PR. Once you 
 prr, closing it cleans up instead: the servers stop, its copy is removed, and its branch is
 deleted (unless you committed on it). Copies of PRs that were merged or closed on GitHub, or not
 opened for 14 days, are removed when prr starts; quitting prr stops the background servers.
-- **Anywhere else**, the app uses its own copy: a blobless clone per repo (history without file
-  contents, so even a big repo's first PR opens quickly) and a checkout per PR.
 
-The app's own copies live in `~/Library/Application Support/review-tool/`. Checkouts you haven't
-opened for 14 days are removed automatically, and **Settings → Storage** (⌘,)
-shows their size with buttons to clear them. Your own clones are never touched by cleanup.
+The copies live in `~/Library/Application Support/review-tool/`; **Settings → Storage** (⌘,) shows
+their size, with buttons to clear them (and anything older versions of prr downloaded). Your own
+clones are never touched by cleanup.
 
 ## Reading the code
 
@@ -314,7 +315,7 @@ The sidebar's width, the diff's split and the agent panel's height are remembere
 
 | Problem | Fix |
 |---|---|
-| "Couldn't load pull requests" | Run `gh api user` in a terminal inside your clone: prr runs exactly that. Fix it there (`gh auth login`, your company's setup) and click **Check again**. |
+| A PR doesn't open (a GitHub error) | Run `gh api user` in a terminal inside your clone: prr runs `gh` exactly like that. Fix it there (`gh auth login`, your company's setup) and try again. |
 | A server chip says **not installed** | Install it (hover the chip for the command), then reopen the PR. |
 | A server chip says **failed** | Hover it to see the error. |
 | C++ types are wrong or headers don't resolve | clangd needs `compile_commands.json` (below). |
@@ -414,7 +415,7 @@ variables → Actions); the workflow uses them when present:
 |---|---|
 | `prr` command, single instance, windows | `src/cli.rs`, `src/instance.rs`, `src/windows.rs`, `src/main.rs` |
 | Home screen, setup check, storage | `src/home.rs`, `src/backend/deps.rs`, `src/backend/cleanup.rs` |
-| GitHub: review queue, PRs, threads, comments, reviews | `src/backend/github.rs` |
+| GitHub: PRs, threads, comments, reviews (all through `gh api`) | `src/backend/github.rs` |
 | Checkouts: your clone, its copy-on-write worktrees, the app's own clones | `src/backend/git.rs` |
 | Side-by-side diff (based on GPUI Kit's, with token hover/click and inline threads) | `src/diffview/` |
 | Syntax highlighting (tree-sitter, VS Code Dark Modern colors) | `src/highlight.rs` |

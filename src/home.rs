@@ -6,7 +6,6 @@ use crate::ui;
 use futures::StreamExt as _;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
 
 pub enum HomeEvent {
     Opened { pr: PRDetails, checkout: Checkout },
@@ -22,9 +21,6 @@ struct PendingSwitch {
 }
 
 pub struct Home {
-    input: Entity<InputState>,
-    /// The two PR lists ("review-requested", "authored"), loaded a page at a time.
-    lists: [PrList; 2],
     tools: Option<Vec<ToolStatus>>,
     show_optional: bool,
     checking: bool,
@@ -36,27 +32,6 @@ pub struct Home {
 }
 
 impl EventEmitter<HomeEvent> for Home {}
-
-/// PRs per page of the home screen's lists.
-const PAGE_SIZE: u32 = 10;
-
-struct PrList {
-    reason: &'static str,
-    label: &'static str,
-    items: Vec<PRSummary>,
-    /// How many PRs GitHub has for this list in all.
-    total: u64,
-    /// Pages loaded so far.
-    pages: u32,
-    loading: bool,
-    error: Option<String>,
-}
-
-impl PrList {
-    fn new(reason: &'static str, label: &'static str) -> Self {
-        Self { reason, label, items: Vec::new(), total: 0, pages: 0, loading: false, error: None }
-    }
-}
 
 impl Home {
     /// Whether it's busy opening a PR.
@@ -74,16 +49,8 @@ impl Home {
         self.pending_switch.is_some()
     }
 
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Paste a PR URL or owner/repo#123"));
-        let subscription = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                this.submit(window, cx);
-            }
-        });
+    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
         Self {
-            input,
-            lists: [PrList::new("review-requested", "Review requested"), PrList::new("authored", "Your pull requests")],
             tools: None,
             show_optional: false,
             checking: false,
@@ -91,10 +58,10 @@ impl Home {
             error: None,
             notice: None,
             pending_switch: None,
-            _subscriptions: vec![subscription],
+            _subscriptions: Vec::new(),
         }
-        // The tool check and the PR lists load when the home screen is shown
-        // (see `refresh`), not for a window opened straight to a PR.
+        // The tool check runs when the home screen is shown (see `refresh`),
+        // not for a window opened straight to a PR.
     }
 
     /// Shown on the home screen after leaving a PR (e.g. "Switched your clone back to main.").
@@ -107,59 +74,16 @@ impl Home {
         self.check_tools(cx);
     }
 
-    // ---- Setup check (git + a logged-in gh are required; the queue waits for them) ----
+    // ---- Setup check (git + a logged-in gh are required) ----
 
     fn check_tools(&mut self, cx: &mut Context<Self>) {
         self.checking = true;
         let fut = backend::task(backend::deps::check());
         cx.spawn(async move |this, cx| {
             let tools = fut.await;
-            let required_ok = tools.iter().all(|t| !t.required || t.ok);
             this.update(cx, |this, cx| {
                 this.tools = Some(tools);
                 this.checking = false;
-                if required_ok {
-                    this.load_queue(cx);
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
-    }
-
-    fn load_queue(&mut self, cx: &mut Context<Self>) {
-        for ix in 0..self.lists.len() {
-            self.lists[ix] = PrList::new(self.lists[ix].reason, self.lists[ix].label);
-            self.load_page(ix, cx);
-        }
-    }
-
-    /// Loads the next page of one list (each list on its own, so one failing
-    /// doesn't hide the other).
-    fn load_page(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let list = &mut self.lists[ix];
-        if list.loading {
-            return;
-        }
-        list.loading = true;
-        list.error = None;
-        let (reason, page) = (list.reason, list.pages + 1);
-        let fut = backend::task(async move { github::review_queue_page(reason, page, PAGE_SIZE).await });
-        cx.spawn(async move |this, cx| {
-            let result = fut.await;
-            this.update(cx, |this, cx| {
-                let list = &mut this.lists[ix];
-                list.loading = false;
-                match result {
-                    Ok((items, total)) => {
-                        list.items.extend(items);
-                        list.total = total;
-                        list.pages = page;
-                    }
-                    Err(e) => list.error = Some(e),
-                }
                 cx.notify();
             })
             .ok();
@@ -169,17 +93,6 @@ impl Home {
     }
 
     // ---- Opening a PR ----
-
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let value = self.input.read(cx).value().to_string();
-        match parse_pr_ref(&value) {
-            Some(r) => self.open(r.owner, r.repo, r.number, None, false, window, cx),
-            None => {
-                self.error = Some("Enter a PR URL or owner/repo#number".into());
-                cx.notify();
-            }
-        }
-    }
 
     pub fn open(&mut self, owner: String, repo: String, number: u64, local_repo: Option<String>, local_worktree: bool, _window: &mut Window, cx: &mut Context<Self>) {
         // Remember the clone: gh runs there for this repo from now on.
@@ -409,112 +322,10 @@ impl Home {
         )
     }
 
-    fn render_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let busy = self.busy.is_some();
-        let mut col = div().flex().flex_col();
-        for (ix, list) in self.lists.iter().enumerate() {
-            let title = if list.total > 0 { format!("{} ({})", list.label, list.total) } else { list.label.to_string() };
-            col = col.child(
-                div()
-                    .mt(px(20.))
-                    .mb(px(6.))
-                    .text_size(theme::TEXT_SMALL)
-                    .text_color(hsla(theme::MUTED))
-                    .child(title.to_uppercase()),
-            );
-            let group: Vec<PRSummary> = list.items.clone();
-            if group.is_empty() {
-                col = col.child(match (&list.error, list.loading) {
-                    (Some(e), _) => ui::copy_error(SharedString::from(format!("queue-error-{ix}")), format!("Couldn't load pull requests: {e}")).into_any_element(),
-                    (None, true) => ui::muted("Loading…").into_any_element(),
-                    (None, false) => ui::muted("None").into_any_element(),
-                });
-                continue;
-            }
-            let count = group.len();
-            col = col.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(hsla(theme::BORDER))
-                    .children(group.into_iter().enumerate().map(|(i, p)| {
-                        let id = SharedString::from(format!("pr-{}-{}-{}", p.owner, p.repo, p.number));
-                        let (owner, repo, number) = (p.owner.clone(), p.repo.clone(), p.number);
-                        div()
-                            .id(id)
-                            .flex()
-                            .items_center()
-                            .gap(px(12.))
-                            .px(px(12.))
-                            .py(px(10.))
-                            .when(i + 1 < count, |el| el.border_b_1().border_color(hsla(theme::BORDER)))
-                            .when(!busy, |el| el.cursor_pointer().hover(|s| s.bg(hsla(theme::HOVER))))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if this.busy.is_none() {
-                                    this.open(owner.clone(), repo.clone(), number, None, false, window, cx);
-                                }
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .gap(px(2.))
-                                    .child(
-                                        div()
-                                            .text_size(theme::TEXT_SMALL)
-                                            .text_color(hsla(theme::MUTED))
-                                            .child(format!("{}/{}#{}", p.owner, p.repo, p.number)),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap(px(6.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .when(p.draft, |el| {
-                                                el.child(
-                                                    div()
-                                                        .text_size(theme::TEXT_TINY)
-                                                        .text_color(hsla(theme::MUTED))
-                                                        .border_1()
-                                                        .border_color(hsla(theme::MUTED))
-                                                        .rounded(px(10.))
-                                                        .px(px(6.))
-                                                        .child("Draft"),
-                                                )
-                                            })
-                                            .child(p.title.clone()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(theme::TEXT_SMALL)
-                                    .text_color(hsla(theme::MUTED))
-                                    .child(format!("{} · {}", p.author, ui::short_date(&p.updated_at))),
-                            )
-                    })),
-            );
-            let more = (list.total as usize).saturating_sub(list.items.len());
-            col = col
-                .when_some(list.error.clone(), |el, e| el.child(div().mt(px(6.)).child(ui::copy_error(SharedString::from(format!("queue-more-error-{ix}")), format!("Couldn't load more: {e}")))))
-                .when(more > 0, |el| {
-                    el.child(
-                        div().mt(px(8.)).child(
-                            ui::link(SharedString::from(format!("more-{ix}")), if list.loading { "Loading…".to_string() } else { format!("Show {} more ({more} left)", more.min(PAGE_SIZE as usize)) })
-                                .on_click(cx.listener(move |this, _, _, cx| this.load_page(ix, cx))),
-                        ),
-                    )
-                });
-        }
-        col
-    }
 }
 
 impl Render for Home {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let busy = self.busy.is_some();
         div()
             .size_full()
             .flex()
@@ -548,38 +359,24 @@ impl Render for Home {
                             .child(
                                 div()
                                     .flex()
-                                    .gap(px(8.))
-                                    .child(div().flex_1().child(Input::new(&self.input).disabled(busy)))
-                                    .child(
-                                        ui::primary_button("open", "Open")
-                                            .px(px(16.))
-                                            .flex()
-                                            .items_center()
-                                            .when(busy, |el| el.opacity(0.5))
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                if this.busy.is_none() {
-                                                    this.submit(window, cx)
-                                                }
-                                            })),
-                                    ),
+                                    .flex_col()
+                                    .gap(px(10.))
+                                    .p(px(16.))
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(hsla(theme::BORDER))
+                                    .bg(hsla(theme::PANEL))
+                                    .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child("Review a pull request"))
+                                    .child(ui::muted("In a terminal, inside your clone of the PR's repository:"))
+                                    .child(ui::copy_command("how-to-open", "prr https://github.com/<org>/<repo>/pull/<number>"))
+                                    .child(ui::muted(
+                                        "prr reviews it right there, on a branch of its own (prr/pr-<number>), and switches your clone back when you close it. After the first time, prr <number> works too.",
+                                    )),
                             )
                             .when_some(self.busy.clone(), |el, b| el.child(ui::muted(b).my(px(8.))))
                             .when_some(self.error.clone(), |el, e| el.child(div().my(px(8.)).child(ui::copy_error("open-error", e))))
                             .when_some(self.notice.clone(), |el, n| el.child(ui::muted(n).my(px(8.))))
-                            .children(self.render_switch(cx))
-                            .child(
-                                div()
-                                    .mt(px(24.))
-                                    .flex()
-                                    .items_baseline()
-                                    .gap(px(12.))
-                                    .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child("Pull requests"))
-                                    .child(ui::link("refresh", "Refresh").on_click(cx.listener(|this, _, _, cx| {
-                                        this.load_queue(cx);
-                                        cx.notify();
-                                    }))),
-                            )
-                            .child(self.render_queue(cx)),
+                            .children(self.render_switch(cx)),
                     ),
             )
     }
