@@ -123,12 +123,13 @@ impl AppView {
         self.opening = None;
         let Some(view) = self.pr.take() else { return };
         view.update(cx, |v, cx| v.close(cx));
-        let (local, number) = {
+        let (local, number, head_sha, approved) = {
             let v = view.read(cx);
-            (v.checkout.local.clone(), v.pr.number)
+            (v.checkout.local.clone(), v.pr.number, v.checkout.head_sha.clone(), v.approved(cx))
         };
-        // A copy-on-write worktree of the user's clone goes away with its window.
-        if let Some(clone) = view.read(cx).checkout.worktree_of.clone() {
+        // A copy-on-write worktree of the user's clone stays for reopening the
+        // PR, until it's approved (or merged/closed: see cleanup at startup).
+        if approved && let Some(clone) = view.read(cx).checkout.worktree_of.clone() {
             let root = view.read(cx).checkout.root.clone();
             let _ = backend::task(async move { git::remove_clone_worktree(&root, &clone).await });
         }
@@ -137,14 +138,20 @@ impl AppView {
             if let (Some(from), Some(pr_branch)) = (local.switched_from.clone(), local.pr_branch.clone()) {
                 let path = local.path.clone();
                 let fut = backend::task({
-                    let (path, from, pr_branch) = (path.clone(), from.clone(), pr_branch.clone());
-                    async move { git::restore_local(&path, &from, &pr_branch).await }
+                    let (path, from, pr_branch, head_sha) = (path.clone(), from.clone(), pr_branch.clone(), head_sha.clone());
+                    async move {
+                        let restored = git::restore_local(&path, &from, &pr_branch).await;
+                        // Approved: the branch has done its job (kept if you committed on it).
+                        let deleted = matches!(restored, Ok(true)) && approved && git::delete_pr_branch(&path, &pr_branch, &head_sha).await;
+                        restored.map(|r| (r, deleted))
+                    }
                 });
                 let home = self.home.clone();
                 cx.spawn(async move |_, cx| {
                     let notice = match fut.await {
-                        Ok(true) => format!("Switched your clone back to {from} (the PR stays on branch {pr_branch})."),
-                        Ok(false) => format!("Left your clone at {path} as it is: it's no longer on {pr_branch} with no changes. It was on {from} before PR #{number}."),
+                        Ok((true, true)) => format!("Switched your clone back to {from} and deleted {pr_branch} (you approved the PR)."),
+                        Ok((true, false)) => format!("Switched your clone back to {from} (the PR stays on branch {pr_branch} for next time)."),
+                        Ok((false, _)) => format!("Left your clone at {path} as it is: it's no longer on {pr_branch} with no changes. It was on {from} before PR #{number}."),
                         Err(e) => format!("Couldn't switch your clone back to {from}: {e}"),
                     };
                     home.update(cx, |home, cx| home.set_notice(Some(notice), cx));

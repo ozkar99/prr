@@ -213,6 +213,14 @@ pub async fn restore_local(path: &str, switched_from: &str, pr_branch: &str) -> 
     Ok(true)
 }
 
+/// Deletes prr's branch for a PR once it's done with, unless it holds
+/// commits beyond the PR head (yours). True if deleted.
+pub async fn delete_pr_branch(path: &str, branch: &str, head_sha: &str) -> bool {
+    let repo = Path::new(path);
+    let tip = git(&["rev-parse", "--verify", "-q", &format!("refs/heads/{branch}")], Some(repo)).await.map(|s| s.trim().to_string()).unwrap_or_default();
+    tip == head_sha && git(&["branch", "-D", branch], Some(repo)).await.is_ok()
+}
+
 // ---- App-managed clone + worktrees ----
 
 /// Above this (KB, as GitHub reports a repository's size), prr won't make its own copy.
@@ -304,6 +312,10 @@ async fn checkout_clone_worktree(pr: &PRDetails, repo: &Path, progress: impl Fn(
             progress("Checking out PR head…".into());
         }
     }
+    // Mark it as used now (for the 14-day cleanup).
+    if let Ok(f) = std::fs::File::options().append(true).open(root.join(".git")) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
     progress("Updating to the PR head…".into());
     let mut args: Vec<&str> = fast.to_vec();
     args.extend(["reset", "--hard", "--quiet", &pr.head_sha]);
@@ -338,7 +350,8 @@ pub async fn remove_clone_worktree(root: &str, clone: &str) {
     let _ = git(&["worktree", "prune"], Some(Path::new(clone))).await;
 }
 
-/// Startup: worktrees of user clones left by a crash (nothing is open yet).
+/// Startup: copies of user clones are kept for reopening their PR; remove
+/// the ones whose PR was merged or closed, or that weren't opened for 14 days.
 pub async fn remove_stale_clone_worktrees() {
     let base = clone_worktrees_dir();
     let Ok(mut owners) = tokio::fs::read_dir(&base).await else { return };
@@ -347,8 +360,23 @@ pub async fn remove_stale_clone_worktrees() {
         while let Ok(Some(repo)) = repos.next_entry().await {
             let Ok(mut prs) = tokio::fs::read_dir(repo.path()).await else { continue };
             while let Ok(Some(pr)) = prs.next_entry().await {
-                // .git is "gitdir: <clone>/.git/worktrees/<name>"
-                let clone = tokio::fs::read_to_string(pr.path().join(".git"))
+                let (owner_s, repo_s) = (owner.file_name().to_string_lossy().into_owned(), repo.file_name().to_string_lossy().into_owned());
+                let number = pr.file_name().to_string_lossy().strip_prefix("pr-").and_then(|n| n.parse::<u64>().ok());
+                // .git is "gitdir: <clone>/.git/worktrees/<name>"; its time is when the PR was last opened.
+                let gitfile = pr.path().join(".git");
+                let unused = tokio::fs::metadata(&gitfile)
+                    .await
+                    .and_then(|m| m.modified())
+                    .map(|t| t.elapsed().unwrap_or_default() > std::time::Duration::from_secs(14 * 24 * 3600))
+                    .unwrap_or(true);
+                let done = match number {
+                    Some(n) => crate::backend::github::pr_is_done(&owner_s, &repo_s, n).await,
+                    None => true,
+                };
+                if !(unused || done) {
+                    continue;
+                }
+                let clone = tokio::fs::read_to_string(&gitfile)
                     .await
                     .ok()
                     .and_then(|t| t.trim().strip_prefix("gitdir: ").map(PathBuf::from))
@@ -458,6 +486,11 @@ mod clone_worktree_tests {
         assert_ne!(again, "prr/pr-7");
         assert_eq!(sh(&["rev-parse", "prr/pr-7"]), mine, "the user's commit is kept");
         assert_eq!(sh(&["rev-parse", &again]), head);
+
+        // Approved: the branch goes, unless it holds the user's commits.
+        assert!(!delete_pr_branch(&dir.to_string_lossy(), "prr/pr-7", &head).await, "has the user's commit");
+        assert!(delete_pr_branch(&dir.to_string_lossy(), &again, &head).await);
+        let again = pr_branch_for(&dir, &pr).await.unwrap();
 
         // Not restored when something changed.
         sh(&["switch", "-q", &again]);

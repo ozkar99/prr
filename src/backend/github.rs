@@ -25,6 +25,11 @@ pub async fn repo_size_kb(owner: &str, repo: &str) -> Result<u64, String> {
     Ok(r["size"].as_u64().unwrap_or(0))
 }
 
+/// Whether a PR was merged or closed (false when GitHub can't say).
+pub async fn pr_is_done(owner: &str, repo: &str, number: u64) -> bool {
+    gh::in_repo(owner, repo, rest(&format!("/repos/{owner}/{repo}/pulls/{number}"))).await.map(|p| p["state"] == "closed").unwrap_or(false)
+}
+
 /// The signed-in account's login, for the setup check.
 pub async fn viewer() -> Result<String, String> {
     Ok(s(&rest("/user").await?["login"]))
