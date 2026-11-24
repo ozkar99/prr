@@ -34,6 +34,55 @@ impl AppView {
         self.home.update(cx, |home, cx| home.open(pr.owner, pr.repo, pr.number, pr.local_repo, pr.local_worktree, window, cx));
     }
 
+    /// Shows the home screen, loading its tool check and PR lists.
+    pub fn show_home(&mut self, cx: &mut Context<Self>) {
+        self.opening = None;
+        self.home.update(cx, |home, cx| home.refresh(cx));
+        cx.notify();
+    }
+
+    /// While a PR is opening (and nothing needs answering on the home
+    /// screen): a plain progress screen, so the home screen's PR lists
+    /// aren't loaded or shown on the way.
+    fn render_opening(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (owner, repo, number) = self.opening.clone()?;
+        let home = self.home.read(cx);
+        if home.needs_answer() {
+            return None;
+        }
+        let (busy, error) = home.opening_status();
+        if busy.is_none() && error.is_none() {
+            return None;
+        }
+        use crate::theme::{self, hsla};
+        use crate::ui;
+        Some(
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(12.))
+                .px(px(40.))
+                .bg(hsla(theme::BG))
+                .text_color(hsla(theme::FG))
+                .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child(format!("{owner}/{repo}#{number}")))
+                .children(busy.map(|b| ui::muted(b)))
+                .children(error.map(|e| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(10.))
+                        .max_w(px(800.))
+                        .child(ui::copy_error("opening-error", e))
+                        .child(ui::link("opening-back", "← Pull requests").on_click(cx.listener(|this, _, _, cx| this.show_home(cx))))
+                }))
+                .into_any_element(),
+        )
+    }
+
     pub fn pr_view(&self) -> Option<Entity<PrView>> {
         self.pr.clone()
     }
@@ -147,7 +196,7 @@ impl Render for AppView {
             .on_action(|_: &crate::windows::MinimizeWindow, window, _| window.minimize_window())
             .child(match &self.pr {
                 Some(pr) => pr.clone().into_any_element(),
-                None => self.home.clone().into_any_element(),
+                None => self.render_opening(cx).unwrap_or_else(|| self.home.clone().into_any_element()),
             })
             .children(self.settings.clone())
     }

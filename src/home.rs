@@ -44,6 +44,16 @@ impl Home {
         self.busy.is_some()
     }
 
+    /// While opening a PR: its progress message and any error.
+    pub fn opening_status(&self) -> (Option<String>, Option<String>) {
+        (self.busy.clone(), self.error.clone())
+    }
+
+    /// Whether it's asking about switching a clone (only the home screen shows that).
+    pub fn needs_answer(&self) -> bool {
+        self.pending_switch.is_some()
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Paste a PR URL or owner/repo#123"));
         let subscription = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
@@ -51,7 +61,7 @@ impl Home {
                 this.submit(window, cx);
             }
         });
-        let mut home = Self {
+        Self {
             input,
             queue: None,
             tools: None,
@@ -64,10 +74,9 @@ impl Home {
             notice: None,
             pending_switch: None,
             _subscriptions: vec![subscription],
-        };
-        home.check_tools(cx);
-        home.load_usage(cx);
-        home
+        }
+        // The tool check and the PR lists load when the home screen is shown
+        // (see `refresh`), not for a window opened straight to a PR.
     }
 
     /// Shown on the home screen after leaving a PR (e.g. "Switched your clone back to main.").
@@ -170,7 +179,8 @@ impl Home {
         let fut = backend::task(async move { github::get_pr(&owner, &repo, number).await });
         cx.spawn(async move |this, cx| match fut.await {
             Ok(pr) => {
-                this.update(cx, |this, cx| this.checkout(pr, local_repo, local_worktree, false, cx)).ok();
+                // In your clone: straight onto a prr/pr-<n> branch, no question asked.
+                this.update(cx, |this, cx| this.checkout(pr, local_repo, local_worktree, true, cx)).ok();
             }
             Err(e) => {
                 this.update(cx, |this, cx| {

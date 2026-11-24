@@ -65,8 +65,9 @@ pub fn open(pr: Option<PRRef>, cx: &mut App) -> Option<WindowHandle<Root>> {
             },
             |window, cx| {
                 let view = cx.new(|cx| AppView::new(window, cx));
-                if let Some(pr) = pr {
-                    view.update(cx, |view, cx| view.open(pr, window, cx));
+                match pr {
+                    Some(pr) => view.update(cx, |view, cx| view.open(pr, window, cx)),
+                    None => view.update(cx, |view, cx| view.show_home(cx)),
                 }
                 // Closing the window cleans up its PR (servers, agent, your clone).
                 let weak = view.downgrade();
