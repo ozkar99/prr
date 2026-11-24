@@ -29,23 +29,38 @@ fn git(args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 
-/// "owner/repo" from a remote URL (https, ssh, or scp-style), whatever the
-/// host: a company may serve its GitHub repos from an internal git host.
+/// "owner/repo" from a github.com remote URL (https, ssh, or scp-style).
 fn github_repo(url: &str) -> Option<(String, String)> {
-    let re = regex::Regex::new(r"[:/]([^/:\s]+)/([^/\s]+?)(?:\.git)?/?$").unwrap();
+    let re = regex::Regex::new(r"github\.com[:/]([^/:\s]+)/([^/\s]+?)(?:\.git)?/?$").unwrap();
     let c = re.captures(url.trim())?;
     Some((c[1].to_string(), c[2].to_string()))
 }
 
-/// The GitHub repo of the current directory's clone: its `upstream` remote
-/// (a fork's original), else `origin`, else any GitHub remote.
+/// The repository name at the end of any remote URL ("monorepo" in
+/// git@git.corp.internal:monorepo.git): an internal git host may not say
+/// which GitHub organization it mirrors.
+fn repo_name(url: &str) -> Option<String> {
+    let re = regex::Regex::new(r"([^/:\s]+?)(?:\.git)?/?$").unwrap();
+    Some(re.captures(url.trim())?[1].to_string())
+}
+
+fn remote_urls() -> Vec<String> {
+    let names = git(&["remote"]).unwrap_or_default();
+    let mut names: Vec<&str> = names.lines().collect();
+    // upstream (a fork's original) first, then origin.
+    names.sort_by_key(|n| match *n {
+        "upstream" => 0,
+        "origin" => 1,
+        _ => 2,
+    });
+    names.iter().filter_map(|n| git(&["remote", "get-url", n])).collect()
+}
+
+/// The GitHub repo of the current directory's clone: the one prr remembers
+/// for it (from a PR opened here by its link), else a github.com remote.
 fn current_repo() -> Option<(String, String)> {
-    for remote in ["upstream", "origin"] {
-        if let Some(r) = git(&["remote", "get-url", remote]).as_deref().and_then(github_repo) {
-            return Some(r);
-        }
-    }
-    git(&["remote"])?.lines().find_map(|r| git(&["remote", "get-url", r]).as_deref().and_then(github_repo))
+    let top = git(&["rev-parse", "--show-toplevel"])?;
+    crate::backend::gh::repo_of_clone(&top).or_else(|| remote_urls().iter().find_map(|u| github_repo(u)))
 }
 
 /// The open PR for the current branch, if any.
@@ -56,7 +71,7 @@ fn current_branch_pr() -> Option<String> {
     let (head_owner, branch) = match git(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) {
         Some(up) => {
             let (remote, branch) = up.split_once('/')?;
-            let owner = git(&["remote", "get-url", remote]).as_deref().and_then(github_repo).map(|(o, _)| o);
+            let owner = git(&["remote", "get-url", remote]).as_deref().and_then(github_repo).map(|(o, _)| o).or(Some(owner.clone()));
             (owner, Some(branch.to_string()))
         }
         None => (Some(owner.clone()), git(&["symbolic-ref", "--short", "-q", "HEAD"])),
@@ -79,20 +94,33 @@ fn resolve_pr(arg: Option<&str>) -> Option<String> {
         return Some(format!("https://github.com/{}/{}/pull/{}", r.owner, r.repo, r.number));
     }
     if let Some(num) = arg.strip_prefix('#').unwrap_or(arg).parse::<u64>().ok() {
-        let (owner, repo) = current_repo().unwrap_or_else(|| fail(&format!("\"{arg}\" is a PR number, but the current directory isn't a clone of a GitHub repository")));
+        let (owner, repo) = current_repo().unwrap_or_else(|| {
+            fail(&match git(&["rev-parse", "--show-toplevel"]) {
+                Some(_) => format!(
+                    "can't tell which GitHub repo this clone is (its remote doesn't say). Run prr once with the PR's link, e.g. prr https://github.com/<org>/<repo>/pull/{num}, and numbers work here after that"
+                ),
+                None => format!("\"{arg}\" is a PR number, but the current directory isn't a git clone. Use the PR's link instead"),
+            })
+        });
         return Some(format!("https://github.com/{owner}/{repo}/pull/{num}"));
     }
     fail(&format!("don't understand \"{arg}\" (expected a PR URL, owner/repo#123, or a number)"))
 }
 
-/// When the current directory is inside a clone of the PR's repo (any of its
-/// remotes points there), its top-level path: the app then reviews the PR in
-/// that clone instead of its own checkout.
+/// When the current directory is inside a clone of the PR's repo, its
+/// top-level path: the app then reviews the PR in that clone instead of its
+/// own checkout, and runs gh there. A clone counts when prr remembers it for
+/// that repo, or one of its remotes ends in the repo's name (an internal git
+/// host may not mention the GitHub organization).
 fn local_clone_for(pr_url: &str) -> Option<String> {
     let pr = crate::backend::types::parse_pr_ref(pr_url)?;
     let top = git(&["rev-parse", "--show-toplevel"])?;
-    let matches = git(&["remote"])?.lines().any(|r| {
-        git(&["remote", "get-url", r]).as_deref().and_then(github_repo).is_some_and(|(o, n)| o.eq_ignore_ascii_case(&pr.owner) && n.eq_ignore_ascii_case(&pr.repo))
+    if let Some((o, r)) = crate::backend::gh::repo_of_clone(&top) {
+        return (o.eq_ignore_ascii_case(&pr.owner) && r.eq_ignore_ascii_case(&pr.repo)).then_some(top);
+    }
+    let matches = remote_urls().iter().any(|u| match github_repo(u) {
+        Some((o, n)) => o.eq_ignore_ascii_case(&pr.owner) && n.eq_ignore_ascii_case(&pr.repo),
+        None => repo_name(u).is_some_and(|n| n.eq_ignore_ascii_case(&pr.repo)),
     });
     matches.then_some(top)
 }
@@ -167,7 +195,7 @@ pub fn handle(args: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::github_repo;
+    use super::{github_repo, repo_name};
 
     #[test]
     fn reads_github_remotes() {
@@ -176,8 +204,10 @@ mod tests {
         assert_eq!(github_repo("https://github.com/ozkar99/prr"), want);
         assert_eq!(github_repo("git@github.com:ozkar99/prr.git"), want);
         assert_eq!(github_repo("ssh://git@github.com/ozkar99/prr.git"), want);
-        assert_eq!(github_repo("git@git.corp.internal:ozkar99/prr.git"), want, "an internal git host");
-        assert_eq!(github_repo("ssh://git@git.corp.internal:7999/scm/ozkar99/prr.git"), want);
-        assert_eq!(github_repo("prr"), None);
+        assert_eq!(github_repo("git@git.corp.internal:team/prr.git"), None, "not github.com: the org may differ");
+        for url in ["git@git.corp.internal:prr.git", "ssh://git@git.corp.internal:7999/scm/team/prr.git", "git@git.corp.internal:prr", "https://git.corp/prr/"] {
+            assert_eq!(repo_name(url).as_deref(), Some("prr"), "{url}");
+        }
     }
+
 }

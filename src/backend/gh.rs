@@ -42,6 +42,11 @@ pub fn remember_clone(owner: &str, repo: &str, path: &str) {
     let _ = std::fs::write(clones_path(), serde_json::to_vec_pretty(&all).unwrap_or_default());
 }
 
+/// The GitHub repo prr remembers for a clone (from a PR opened in it).
+pub fn repo_of_clone(path: &str) -> Option<(String, String)> {
+    clones().into_iter().find(|(k, v)| !k.is_empty() && v == path).and_then(|(k, _)| k.split_once('/').map(|(o, r)| (o.to_string(), r.to_string())))
+}
+
 /// Set by the `prr` command: gh runs in the clone it was started in.
 static OVERRIDE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
