@@ -19,6 +19,12 @@ async fn graphql(query: &str, variables: Value) -> Result<Value, String> {
     Ok(body["data"].clone())
 }
 
+/// The repository's size on GitHub, in KB (roughly what a clone downloads).
+pub async fn repo_size_kb(owner: &str, repo: &str) -> Result<u64, String> {
+    let r = gh::in_repo(owner, repo, rest(&format!("/repos/{owner}/{repo}"))).await?;
+    Ok(r["size"].as_u64().unwrap_or(0))
+}
+
 /// The signed-in account's login, for the setup check.
 pub async fn viewer() -> Result<String, String> {
     Ok(s(&rest("/user").await?["login"]))
