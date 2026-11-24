@@ -1,6 +1,7 @@
 //! The languages that ship with the app, one file each, plus helpers they share.
 mod cpp;
 mod go;
+mod markdown;
 mod python;
 mod rust;
 mod shell;
@@ -8,6 +9,7 @@ mod starlark;
 
 pub use cpp::Cpp;
 pub use go::Go;
+pub use markdown::Markdown;
 pub use python::Python;
 pub use rust::Rust;
 pub use shell::Shell;
@@ -26,6 +28,7 @@ pub fn all() -> Vec<Arc<dyn Language>> {
         Arc::new(Rust),
         Arc::new(Shell),
         Arc::new(Starlark),
+        Arc::new(Markdown),
     ]
 }
 

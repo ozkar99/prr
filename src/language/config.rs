@@ -50,7 +50,7 @@ pub struct Entry {
     pub env: BTreeMap<String, String>,
     /// LSP `languageId` (defaults to the id).
     pub language_id: Option<String>,
-    /// Borrow a built-in grammar for syntax colors: go, c, cpp, python, rust or bash.
+    /// Borrow a built-in grammar for syntax colors: go, c, cpp, python, rust, bash or markdown.
     pub grammar: Option<String>,
     /// Shown when the server isn't installed.
     pub install: Option<String>,
@@ -72,7 +72,7 @@ impl Configured {
     }
 }
 
-const GRAMMARS: &[&str] = &["go", "c", "cpp", "python", "rust", "bash"];
+const GRAMMARS: &[&str] = &["go", "c", "cpp", "python", "rust", "bash", "markdown"];
 
 impl Language for Configured {
     fn id(&self) -> &str {
@@ -182,7 +182,7 @@ pub fn parse(text: &str, builtins: &[Arc<dyn Language>], source: &str) -> (Vec<A
         };
         let base = builtins.iter().find(|b| b.id() == id).cloned();
         if base.is_none() && entry.extensions.is_empty() && entry.filenames.is_empty() {
-            errors.push(format!("{source}: language \"{id}\" needs extensions or filenames (or the id of a built-in: go, cpp, python, rust, shell, starlark)"));
+            errors.push(format!("{source}: language \"{id}\" needs extensions or filenames (or the id of a built-in: go, cpp, python, rust, shell, starlark, markdown)"));
             continue;
         }
         if base.is_none() && entry.command.is_none() && entry.grammar.is_none() {
