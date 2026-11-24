@@ -87,11 +87,14 @@ async fn github_status() -> ToolStatus {
     match crate::backend::github::viewer().await {
         Ok(login) => {
             status.ok = true;
-            status.purpose = format!("GitHub access, signed in as @{login}");
+            let host = auth::token().await.map(|t| t.host).unwrap_or_default();
+            let via = if host == "github.com" { String::new() } else { format!(" via {host}") };
+            status.purpose = format!("GitHub access, signed in as @{login}{via}");
         }
         Err(e) => {
             status.problem = Some(e);
-            status.fix = Some("gh auth refresh -h github.com".into());
+            let host = auth::token().await.map(|t| t.host).unwrap_or("github.com".into());
+            status.fix = Some(format!("gh auth refresh -h {host}"));
         }
     }
     status

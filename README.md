@@ -49,6 +49,12 @@ It also runs `gh` inside a clone of your repo, as if you had `cd`'d into it, so 
 last ran `prr` in (the `prr` command uses the clone you run it from), or the folder set in
 **Settings → Run gh in**.
 
+prr also sends its GitHub requests wherever `gh api` sends them by default. If your company points
+`gh` at its own host that passes requests on to GitHub, prr uses that host and its token too, and the
+home screen says "signed in as @you via <host>". A clone whose remote is an internal git host
+(`git@git.corp.internal:org/repo.git`) counts as a clone of `github.com/org/repo`; if that host
+doesn't have GitHub's pull request refs, prr fetches the PR from GitHub instead.
+
 ### Language servers
 
 Syntax highlighting works without them; they add hover, navigation and references. Install the

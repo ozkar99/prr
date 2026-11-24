@@ -32,6 +32,39 @@ pub struct Token {
     pub program: String,
     /// The folder it ran in.
     pub folder: String,
+    /// The GitHub host gh talks to by default ("github.com", or a company
+    /// host that passes requests on to GitHub).
+    pub host: String,
+    /// REST API base URL on that host ("https://api.github.com").
+    pub api: String,
+    /// GraphQL endpoint on that host.
+    pub graphql: String,
+}
+
+/// Where gh sends API requests by default: `gh api` with no `--hostname`,
+/// as you'd type it. A company setup may point it at its own host (GH_HOST
+/// in a wrapper, say); prr then uses that host too. Read from the request
+/// gh reports with `--verbose` ("* Request to https://…/user").
+async fn default_endpoint() -> (String, String, String) {
+    let github = ("github.com".to_string(), "https://api.github.com".to_string(), "https://api.github.com/graphql".to_string());
+    let Ok(out) = run_gh(&["api", "--verbose", "user"]).await else { return github };
+    endpoint_from(&format!("{}\n{}", out.stderr, out.stdout)).unwrap_or(github)
+}
+
+fn endpoint_from(verbose: &str) -> Option<(String, String, String)> {
+    let re = regex::Regex::new(r"\* Request to (https?://([^/\s]+)(/\S*)?)/user\b").unwrap();
+    let c = re.captures(verbose)?;
+    let (api, api_host) = (c[1].to_string(), c[2].to_string());
+    if api_host == "api.github.com" {
+        return None;
+    }
+    // GitHub Enterprise Server style: https://host/api/v3 → https://host/api/graphql.
+    let graphql = match api.strip_suffix("/api/v3") {
+        Some(root) => format!("{root}/api/graphql"),
+        None => format!("{api}/graphql"),
+    };
+    let host = api_host.strip_prefix("api.").unwrap_or(&api_host).to_string();
+    Some((host, api, graphql))
 }
 
 /// Runs gh in another folder from now on: a clone of the repo you review,
@@ -179,7 +212,8 @@ pub async fn token() -> Result<Token, String> {
     if let Some(t) = cache.as_ref().filter(|t| t.account == account && t.program == program && t.folder == folder) {
         return Ok(t.clone());
     }
-    let mut args = vec!["auth", "token", "--hostname", "github.com"];
+    let (host, api, graphql) = default_endpoint().await;
+    let mut args = vec!["auth", "token", "--hostname", host.as_str()];
     if let Some(a) = &account {
         args.extend(["--user", a.as_str()]);
     }
@@ -191,7 +225,7 @@ pub async fn token() -> Result<Token, String> {
             None => "gh isn't logged in. Run: gh auth login".into(),
         });
     }
-    let found = Token { value, account, program, folder };
+    let found = Token { value, account, program, folder, host, api, graphql };
     *cache = Some(found.clone());
     *CURRENT.lock().unwrap() = Some(found.clone());
     Ok(found)
@@ -203,7 +237,7 @@ pub async fn forget() {
     *CURRENT.lock().unwrap() = None;
 }
 
-/// A github.com account gh is logged in to.
+/// An account gh is logged in to, on the host it uses.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Account {
     pub login: String,
@@ -216,15 +250,16 @@ pub struct Account {
 /// old to list them).
 pub async fn accounts() -> Vec<Account> {
     // `gh auth status` exits non-zero when any account has a problem, but still prints the list.
-    let Ok(out) = run_gh(&["auth", "status", "--hostname", "github.com", "--json", "hosts"]).await else { return Vec::new() };
-    parse_accounts(&out.stdout)
+    let host = token().await.map(|t| t.host).unwrap_or_else(|_| "github.com".into());
+    let Ok(out) = run_gh(&["auth", "status", "--hostname", &host, "--json", "hosts"]).await else { return Vec::new() };
+    parse_accounts(&out.stdout, &host)
 }
 
-fn parse_accounts(text: &str) -> Vec<Account> {
+fn parse_accounts(text: &str, host: &str) -> Vec<Account> {
     // The JSON, skipping anything shell startup files printed before it.
     let json = text.find('{').map(|i| &text[i..]).unwrap_or("");
     let Ok(v) = serde_json::from_str::<Value>(json) else { return Vec::new() };
-    v["hosts"]["github.com"]
+    v["hosts"][host]
         .as_array()
         .into_iter()
         .flatten()
@@ -246,6 +281,10 @@ pub async fn git_env() -> Vec<(String, String)> {
 /// [`git_env`] with the token already looked up (empty before that).
 pub fn git_env_now() -> Vec<(String, String)> {
     let Some(t) = CURRENT.lock().unwrap().clone() else { return Vec::new() };
+    // A company host's token isn't github.com's: leave git to its own credentials.
+    if t.host != "github.com" {
+        return Vec::new();
+    }
     use base64::Engine as _;
     let basic = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{}", t.value));
     vec![
@@ -265,11 +304,24 @@ mod tests {
             {"state":"success","active":true,"host":"github.com","login":"me","tokenSource":"keyring"},
             {"state":"error","active":false,"host":"github.com","login":"me-work","tokenSource":"keyring"}]}}"#;
         assert_eq!(
-            parse_accounts(json),
+            parse_accounts(json, "github.com"),
             vec![Account { login: "me".into(), active: true, ok: true }, Account { login: "me-work".into(), active: false, ok: false }]
         );
-        assert!(parse_accounts("unknown flag: --json").is_empty());
-        assert_eq!(parse_accounts(&format!("Welcome!\n{json}")).len(), 2, "skips shell noise");
+        assert!(parse_accounts("unknown flag: --json", "github.com").is_empty());
+        assert_eq!(parse_accounts(&format!("Welcome!\n{json}"), "github.com").len(), 2, "skips shell noise");
+    }
+
+    #[test]
+    fn reads_where_gh_sends_requests() {
+        assert_eq!(endpoint_from("* Request to https://api.github.com/user\n> GET /user"), None, "github.com: the default");
+        assert_eq!(
+            endpoint_from("* Request at x\n* Request to https://github.corp.example/api/v3/user\n"),
+            Some(("github.corp.example".into(), "https://github.corp.example/api/v3".into(), "https://github.corp.example/api/graphql".into()))
+        );
+        assert_eq!(
+            endpoint_from("* Request to https://api.corp.ghe.com/user"),
+            Some(("corp.ghe.com".into(), "https://api.corp.ghe.com".into(), "https://api.corp.ghe.com/graphql".into()))
+        );
     }
 
     #[test]

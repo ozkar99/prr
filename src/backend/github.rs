@@ -29,13 +29,14 @@ async fn send(req: reqwest::RequestBuilder) -> Result<reqwest::Response, String>
     if res.status() == reqwest::StatusCode::UNAUTHORIZED {
         auth::forget().await;
         let who = token.account.map(|a| format!(" for @{a}")).unwrap_or_default();
-        return Err(format!("GitHub rejected gh's token{who}. Run: gh auth refresh -h github.com"));
+        return Err(format!("GitHub rejected gh's token{who} for {}. Run: gh auth refresh -h {}", token.host, token.host));
     }
     Ok(res)
 }
 
 async fn rest(path: &str) -> Result<Value, String> {
-    let res = send(client().await?.get(format!("https://api.github.com{path}"))).await?;
+    let api = auth::token().await?.api;
+    let res = send(client().await?.get(format!("{api}{path}"))).await?;
     let status = res.status();
     let body: Value = res.json().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
@@ -45,7 +46,8 @@ async fn rest(path: &str) -> Result<Value, String> {
 }
 
 async fn graphql(query: &str, variables: Value) -> Result<Value, String> {
-    let res = send(client().await?.post("https://api.github.com/graphql").json(&json!({ "query": query, "variables": variables }))).await?;
+    let url = auth::token().await?.graphql;
+    let res = send(client().await?.post(url).json(&json!({ "query": query, "variables": variables }))).await?;
     let body: Value = res.json().await.map_err(|e| e.to_string())?;
     if let Some(errors) = body["errors"].as_array().filter(|e| !e.is_empty()) {
         let msgs: Vec<&str> = errors.iter().filter_map(|e| e["message"].as_str()).collect();
