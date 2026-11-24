@@ -44,6 +44,11 @@ in a shell function or alias (to set a company token, for example), prr uses the
 something else, set **Settings → gh command** to a path (`/usr/local/bin/corp-gh`) or a command
 name.
 
+It also runs `gh` inside a clone of your repo, as if you had `cd`'d into it, so anything that sets
+`gh`'s environment there (direnv, mise, per-repo company settings) applies too. That's the clone you
+last ran `prr` in (the `prr` command uses the clone you run it from), or the folder set in
+**Settings → Run gh in**.
+
 ### Language servers
 
 Syntax highlighting works without them; they add hover, navigation and references. Install the

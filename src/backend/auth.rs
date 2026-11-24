@@ -15,6 +15,8 @@ pub const HOW_TO_FIX: &str = "brew install gh && gh auth login";
 
 /// The gh command from Settings (empty: `gh`, as your shell runs it).
 static GH: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+/// The folder gh runs in (a clone of the repo, so its environment applies; empty: home).
+static FOLDER: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 /// The account picked in Settings (None: gh's active account).
 static ACCOUNT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static CACHE: Mutex<Option<Token>> = Mutex::const_new(None);
@@ -28,6 +30,33 @@ pub struct Token {
     pub account: Option<String>,
     /// The gh command that gave it.
     pub program: String,
+    /// The folder it ran in.
+    pub folder: String,
+}
+
+/// Runs gh in another folder from now on: a clone of the repo you review,
+/// so anything that sets gh's environment there (direnv, mise, a company
+/// wrapper's per-repo settings) applies, as in a terminal `cd`'d into it.
+pub fn set_folder(folder: &str) {
+    let folder = expand_home(folder.trim());
+    let mut current = FOLDER.lock().unwrap();
+    if *current != folder {
+        *current = folder;
+        *CURRENT.lock().unwrap() = None;
+    }
+}
+
+/// The folder gh runs in, if it exists.
+pub fn folder() -> Option<String> {
+    let f = FOLDER.lock().unwrap().clone();
+    (!f.is_empty() && std::path::Path::new(&f).is_dir()).then_some(f)
+}
+
+fn expand_home(path: &str) -> String {
+    match path.strip_prefix("~/") {
+        Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
+        None => path.to_string(),
+    }
 }
 
 /// Runs another gh from now on (from Settings; empty: `gh` through your shell).
@@ -43,13 +72,7 @@ pub fn set_gh_command(command: &str) {
 /// The gh command: the one from Settings (`~` expanded), or `gh`.
 pub fn gh_program() -> String {
     let command = GH.lock().unwrap().clone();
-    if command.is_empty() {
-        return "gh".into();
-    }
-    match command.strip_prefix("~/") {
-        Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
-        None => command,
-    }
+    if command.is_empty() { "gh".into() } else { expand_home(&command) }
 }
 
 /// The user's shell (what Terminal runs).
@@ -59,14 +82,19 @@ fn user_shell() -> String {
 
 /// How to run gh with `args`: a path runs as it is; a name (`gh`, or a
 /// wrapper's name) runs through an interactive login shell, like typing it
-/// in a terminal, so shell functions and aliases work.
+/// in a terminal, so shell functions and aliases work. The shell first `cd`s
+/// into $PRR_GH_DIR (when set), which also runs its cd hooks (direnv, mise).
 fn invocation(program: &str, args: &[&str]) -> (String, Vec<String>) {
     let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     if program.contains('/') {
         return (program.to_string(), args);
     }
     let shell = user_shell();
-    let script = if shell.ends_with("fish") { format!("{program} $argv") } else { format!("{program} \"$@\"") };
+    let script = if shell.ends_with("fish") {
+        format!("test -n \"$PRR_GH_DIR\"; and cd $PRR_GH_DIR; {program} $argv")
+    } else {
+        format!("[ -n \"$PRR_GH_DIR\" ] && cd -- \"$PRR_GH_DIR\"; {program} \"$@\"")
+    };
     let mut full = vec!["-l".into(), "-i".into(), "-c".into(), script];
     if !shell.ends_with("fish") {
         full.push(program.to_string()); // $0
@@ -87,7 +115,17 @@ async fn run_gh(args: &[&str]) -> Result<GhOutput, String> {
         return Err(format!("{program} (the gh command in Settings) doesn't exist"));
     }
     let (cmd, full) = invocation(&program, args);
-    let child = tokio::process::Command::new(&cmd)
+    let folder = folder();
+    let mut command = tokio::process::Command::new(&cmd);
+    // A path runs in the folder directly. The shell starts at home and `cd`s
+    // there itself, so that its cd hooks run as they would in a terminal.
+    let home = std::env::var("HOME").unwrap_or("/".into());
+    match &folder {
+        Some(f) if program.contains('/') => command.current_dir(f),
+        Some(f) => command.current_dir(&home).env("PRR_GH_DIR", f),
+        None => command.current_dir(&home).env_remove("PRR_GH_DIR"),
+    };
+    let child = command
         .args(&full)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -137,7 +175,8 @@ pub async fn token() -> Result<Token, String> {
     let mut cache = CACHE.lock().await;
     let account = ACCOUNT.lock().unwrap().clone();
     let program = gh_program();
-    if let Some(t) = cache.as_ref().filter(|t| t.account == account && t.program == program) {
+    let folder = folder().unwrap_or_default();
+    if let Some(t) = cache.as_ref().filter(|t| t.account == account && t.program == program && t.folder == folder) {
         return Ok(t.clone());
     }
     let mut args = vec!["auth", "token", "--hostname", "github.com"];
@@ -152,7 +191,7 @@ pub async fn token() -> Result<Token, String> {
             None => "gh isn't logged in. Run: gh auth login".into(),
         });
     }
-    let found = Token { value, account, program };
+    let found = Token { value, account, program, folder };
     *cache = Some(found.clone());
     *CURRENT.lock().unwrap() = Some(found.clone());
     Ok(found)
