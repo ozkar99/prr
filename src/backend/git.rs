@@ -60,10 +60,15 @@ async fn matching_remote(repo: &Path, owner: &str, name: &str) -> Option<String>
     remotes.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
         let (remote, url) = (parts.next()?, parts.next()?);
-        let path = url.trim_end_matches(".git").to_lowercase();
-        // Any host: a company may serve its GitHub repos from an internal git host.
-        (path.ends_with(&format!("/{wanted}")) || path.ends_with(&format!(":{wanted}")))
-            .then(|| remote.to_string())
+        let path = url.trim_end_matches('/').trim_end_matches(".git").to_lowercase();
+        // Any host: a company may serve its GitHub repos from an internal git
+        // host, which may not mention the organization (git@host:repo.git).
+        let repo_only = name.to_lowercase();
+        let found = path.ends_with(&format!("/{wanted}"))
+            || path.ends_with(&format!(":{wanted}"))
+            || path.ends_with(&format!("/{repo_only}"))
+            || path.ends_with(&format!(":{repo_only}"));
+        found.then(|| remote.to_string())
     })
 }
 

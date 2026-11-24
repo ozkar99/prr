@@ -44,7 +44,9 @@ as if you typed it in a terminal:
   prr remembers for that repo; for anything else it uses the clone you used last.
 
 If `gh api user` works in your terminal inside the repo, prr works. A clone whose remote is an
-internal git host (`git@git.corp.internal:org/repo.git`) counts as a clone of `github.com/org/repo`;
+internal git host counts as a clone of the PR's repo when the remote ends in the repo's name
+(`git@git.corp.internal:repo.git`). If the remote doesn't say which GitHub organization it is, run
+`prr` with the PR's full link once from that clone; after that, `prr <number>` works there;
 if that host doesn't have GitHub's pull request refs, prr fetches the PR from GitHub. prr's own
 checkouts (for PRs you open outside a clone) download over HTTPS with your git credentials, or
 through gh if git has none.
