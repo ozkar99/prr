@@ -6,7 +6,7 @@
 //! executor, so backend work is started on a tokio runtime with [`task`] and the
 //! resulting future is awaited from gpui (`cx.spawn`).
 pub mod agent;
-pub mod auth;
+pub mod gh;
 pub mod cleanup;
 pub mod deps;
 pub mod exec;

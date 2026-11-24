@@ -61,11 +61,10 @@ fn current_branch_pr() -> Option<String> {
         }
         None => (Some(owner.clone()), git(&["symbolic-ref", "--short", "-q", "HEAD"])),
     };
-    let settings = crate::settings::load();
-    crate::backend::auth::set_account(&settings.github_account);
-    crate::backend::auth::set_gh_command(&settings.gh_command);
-    // In a clone, gh runs right here, like typing it in this terminal.
-    crate::backend::auth::set_folder(&git(&["rev-parse", "--show-toplevel"]).unwrap_or_else(|| settings.gh_folder_in_use().to_string()));
+    // gh runs right here, like typing it in this terminal.
+    if let Some(top) = git(&["rev-parse", "--show-toplevel"]) {
+        crate::backend::gh::run_in(&top);
+    }
     crate::backend::block_on(crate::backend::github::pr_for_branch(&owner, &repo, head_owner.as_deref(), branch.as_deref(), sha.as_deref())).ok().flatten()
 }
 

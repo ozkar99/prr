@@ -126,7 +126,6 @@ impl AppView {
                 }
                 cx.notify();
             }
-            SettingsEvent::GitHubAccountChanged => this.home.update(cx, |home, cx| home.refresh(cx)),
         });
         self._subscriptions.push(sub);
         self.settings = Some(view);
