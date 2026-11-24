@@ -135,6 +135,15 @@ impl Language for Configured {
         }
         Some(Ok(spec))
     }
+    fn adjust_for_pr(&self, spec: &mut ServerSpec, root: &Path, changed: &[String]) {
+        // A built-in's own adjustments, unless its server or options were replaced here.
+        if let Some(b) = &self.base
+            && self.entry.command.is_none()
+            && self.entry.initialization_options.is_none()
+        {
+            b.adjust_for_pr(spec, root, changed);
+        }
+    }
     fn install_hint(&self) -> String {
         match (&self.entry.install, &self.base) {
             (Some(h), _) => h.clone(),

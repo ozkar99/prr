@@ -309,6 +309,26 @@ The sidebar's width, the diff's split and the agent panel's height are remembere
 | C++ types are wrong or headers don't resolve | clangd needs `compile_commands.json` (below). |
 | The agent exited | Its output is in the panel. Check **Agent command** in Settings, then **Restart**. |
 
+### Go in Bazel monorepos
+
+In a Bazel repository (`WORKSPACE`, `WORKSPACE.bazel` or `MODULE.bazel` at the top), gopls would
+walk Bazel's output folders (`bazel-bin`, `bazel-out`, … links into a huge cache) and load every
+package in the repository before answering anything, which can keep every CPU busy for a long time.
+There, prr has gopls skip those folders and load only the folders the PR changes; the header
+shows "gopls: running · N folders". Code those folders use still loads when needed, so hover,
+Go to Definition and Peek work everywhere; Find All References searches only the PR's folders.
+
+If your repository's Go code only resolves through Bazel, gopls needs Bazel's packages driver.
+prr doesn't turn that on by itself, because it runs `bazel`, which runs the build files of the PR
+you're reviewing. If you trust the repository, point gopls at its driver script in
+`languages.toml`:
+
+```toml
+[[language]]
+id = "go"
+env = { GOPACKAGESDRIVER = "/path/to/monorepo/tools/gopackagesdriver.sh" }
+```
+
 ### C++ compile flags
 
 clangd uses `compile_commands.json` at the repo root or in `build/`, `out/`,
