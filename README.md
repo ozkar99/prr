@@ -155,6 +155,10 @@ opens a new window, **⌘`** switches windows, and the app quits with its last w
   branch stays, with anything you committed on it; if it has commits of yours, a later review of
   that PR uses `prr/pr-<number>-<commit>` instead of touching them. It never switches a clone with
   uncommitted changes: then the PR opens in a copy-on-write copy of the clone (below) instead.
+- **Opened some other way** (the home screen, a link, `prr` outside the clone): if prr has
+  reviewed that repo in your clone before, it uses a copy-on-write copy of that clone (below)
+  instead of downloading the repository. It never downloads a repository bigger than about 2 GB
+  on its own: run `prr` inside your clone of it instead.
 - **More PRs from the same clone** (another window is using it), or a clone with uncommitted
   changes: the PR gets a `git worktree` of your clone whose files are copy-on-write copies of your
   checkout. It shares the clone's objects and only costs disk for the files that differ, so

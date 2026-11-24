@@ -43,6 +43,14 @@ pub async fn checkout(
     allow_switch: bool,
     progress: impl Fn(String),
 ) -> Result<CheckoutResult, String> {
+    // Not run inside a clone (opened from the home screen, a link, another
+    // folder): a clone prr has reviewed this repo in before still beats a new
+    // copy. Its copy-on-write worktree leaves the clone itself alone.
+    if local_repo.is_none()
+        && let Some(clone) = crate::backend::gh::clone_for(&pr.owner, &pr.repo)
+    {
+        return checkout_clone_worktree(pr, Path::new(&clone), progress).await.map(CheckoutResult::Ready);
+    }
     match local_repo {
         Some(path) if local_worktree => checkout_clone_worktree(pr, Path::new(path), progress).await.map(CheckoutResult::Ready),
         Some(path) => match checkout_local(pr, Path::new(path), allow_switch, &progress).await? {
@@ -207,10 +215,26 @@ pub async fn restore_local(path: &str, switched_from: &str, pr_branch: &str) -> 
 
 // ---- App-managed clone + worktrees ----
 
+/// Above this (KB, as GitHub reports a repository's size), prr won't make its own copy.
+const LARGE_REPO_KB: u64 = 2_000_000;
+
 async fn checkout_managed(pr: &PRDetails, progress: impl Fn(String)) -> Result<Checkout, String> {
     let bare = bare_repo_path(&pr.owner, &pr.repo);
     let bare_s = bare.to_string_lossy().to_string();
     if !bare.exists() {
+        // Never download a huge repository unasked: a monorepo belongs in the
+        // user's own clone.
+        if let Ok(kb) = crate::backend::github::repo_size_kb(&pr.owner, &pr.repo).await
+            && kb > LARGE_REPO_KB
+        {
+            return Err(format!(
+                "{}/{} is about {:.1} GB, too big for prr to download a copy of. Run prr inside your clone of it instead: cd <your clone> && prr {}",
+                pr.owner,
+                pr.repo,
+                kb as f64 / 1_000_000.0,
+                pr.url
+            ));
+        }
         progress(format!("Cloning {}/{} (first time only)…", pr.owner, pr.repo));
         tokio::fs::create_dir_all(bare.parent().unwrap()).await.map_err(|e| e.to_string())?;
         // Blobless: history without file contents; contents arrive when checked out.
