@@ -146,9 +146,12 @@ opens a new window, **⌘`** switches windows, and the app quits with its last w
 ### Where the code comes from
 
 - **Inside your own clone of the PR's repo**, `prr` reviews the PR right there: no second
-  copy, and your language-server caches are reused. The PR's commits are fetched into your clone
-  without adding branches or refs. If the clone isn't already at the PR, the app asks before
-  switching it and switches it back when you close the PR. It never switches a clone with
+  copy, and your language-server caches are reused. If the clone isn't already at the PR, the app
+  asks, then switches it to a branch of its own, `prr/pr-<number>`, at the PR's head (never a
+  detached HEAD, and never your branches). When you close the PR it switches back to the branch
+  you were on, if the clone is still on `prr/pr-<number>` with no uncommitted changes. The PR
+  branch stays, with anything you committed on it; if it has commits of yours, a later review of
+  that PR uses `prr/pr-<number>-<commit>` instead of touching them. It never switches a clone with
   uncommitted changes.
 - **More PRs from the same clone** (another window is using it), or a clone with uncommitted
   changes: the PR gets a `git worktree` of your clone whose files are copy-on-write copies of your

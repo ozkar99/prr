@@ -107,18 +107,18 @@ async fn checkout_local(pr: &PRDetails, repo: &Path, allow_switch: bool, progres
     let top_s = top.to_string_lossy().to_string();
 
     let head = git(&["rev-parse", "HEAD"], Some(&top)).await?.trim().to_string();
-    let ready = |switched_from: Option<String>| {
+    let ready = |switched_from: Option<String>, pr_branch: Option<String>| {
         crate::backend::fsaccess::allow_root(&top);
         CheckoutResult::Ready(Checkout {
             root: top_s.clone(),
             merge_base: merge_base.clone(),
             head_sha: pr.head_sha.clone(),
-            local: Some(LocalClone { path: top_s.clone(), switched_from }),
+            local: Some(LocalClone { path: top_s.clone(), switched_from, pr_branch }),
             worktree_of: None,
         })
     };
     if head == pr.head_sha {
-        return Ok(ready(None));
+        return Ok(ready(None, None));
     }
 
     // Not at the PR head: ask before moving the user's clone, and never with uncommitted changes.
@@ -131,21 +131,53 @@ async fn checkout_local(pr: &PRDetails, repo: &Path, allow_switch: bool, progres
             dirty,
         });
     }
-    progress("Switching your clone to the PR…".into());
-    git(&["checkout", "--detach", &pr.head_sha], Some(&top)).await?;
+    // The PR gets its own branch, never a detached HEAD: anything done in the
+    // clone while reviewing stays on that branch, and switching back is safe.
+    let pr_branch = pr_branch_for(&top, pr).await?;
+    progress(format!("Switching your clone to {pr_branch}…"));
+    git(&["switch", &pr_branch], Some(&top)).await?;
     // What to switch back to when the PR is closed.
-    Ok(ready(Some(branch.unwrap_or(head))))
+    Ok(ready(Some(branch.unwrap_or(head)), Some(pr_branch)))
 }
 
-/// Puts the user's clone back where it was, if it's still at the PR head with no changes.
-pub async fn restore_local(path: &str, switched_from: &str, head_sha: &str) -> Result<bool, String> {
+/// A branch at the PR head for reviewing it in the user's clone: prr/pr-<n>,
+/// created there, or moved forward if it only lags behind the PR. If it holds
+/// commits of the user's own, they're left alone and a new branch is made.
+async fn pr_branch_for(top: &Path, pr: &PRDetails) -> Result<String, String> {
+    let name = format!("prr/pr-{}", pr.number);
+    let tip = git(&["rev-parse", "--verify", "-q", &format!("refs/heads/{name}")], Some(top)).await.ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let Some(tip) = tip else {
+        git(&["branch", &name, &pr.head_sha], Some(top)).await?;
+        return Ok(name);
+    };
+    if tip == pr.head_sha {
+        return Ok(name);
+    }
+    // Behind the PR head (the PR got new commits): move it forward.
+    if git(&["merge-base", "--is-ancestor", &tip, &pr.head_sha], Some(top)).await.is_ok() {
+        git(&["branch", "-f", &name, &pr.head_sha], Some(top)).await?;
+        return Ok(name);
+    }
+    // It has commits that aren't in the PR: keep them, use another branch.
+    let other = format!("{name}-{}", &pr.head_sha[..pr.head_sha.len().min(7)]);
+    git(&["branch", "-f", &other, &pr.head_sha], Some(top)).await?;
+    Ok(other)
+}
+
+/// Puts the user's clone back on the branch it was on, if it's still on the
+/// PR's branch with no uncommitted changes. The PR branch is kept, with
+/// anything committed on it.
+pub async fn restore_local(path: &str, switched_from: &str, pr_branch: &str) -> Result<bool, String> {
     let repo = Path::new(path);
-    let head = git(&["rev-parse", "HEAD"], Some(repo)).await?.trim().to_string();
+    let current = git(&["symbolic-ref", "--short", "-q", "HEAD"], Some(repo)).await.unwrap_or_default().trim().to_string();
     let dirty = !git(&["status", "--porcelain", "--untracked-files=no"], Some(repo)).await?.trim().is_empty();
-    if head != head_sha || dirty {
+    if current != pr_branch || dirty {
         return Ok(false); // the user moved on or changed something; leave it alone
     }
-    git(&["checkout", switched_from], Some(repo)).await?;
+    // A branch name, or a commit if the clone wasn't on a branch before.
+    if git(&["switch", switched_from], Some(repo)).await.is_err() {
+        git(&["switch", "--detach", switched_from], Some(repo)).await?;
+    }
     Ok(true)
 }
 
@@ -336,5 +368,54 @@ mod clone_worktree_tests {
         assert!(!Path::new(&co.root).exists());
         let list = git(&["worktree", "list"], Some(Path::new(&clone))).await.unwrap();
         assert_eq!(list.lines().count(), 1, "{list}");
+    }
+
+    #[tokio::test]
+    async fn reviews_on_a_pr_branch_and_switches_back() {
+        let dir = std::env::temp_dir().join(format!("prr-branch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sh = |args: &[&str]| {
+            let out = std::process::Command::new("git").args(args).current_dir(&dir).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        sh(&["init", "-q", "-b", "main"]);
+        sh(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"]);
+        let base = sh(&["rev-parse", "HEAD"]);
+        sh(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "pr"]);
+        let head = sh(&["rev-parse", "HEAD"]);
+        sh(&["reset", "-q", "--hard", &base]);
+        let pr = PRDetails {
+            owner: "o".into(), repo: "r".into(), number: 7, title: String::new(), body: String::new(), author: String::new(),
+            url: String::new(), base_ref: "main".into(), base_sha: base.clone(), head_sha: head.clone(), files: vec![],
+        };
+
+        let branch = pr_branch_for(&dir, &pr).await.unwrap();
+        assert_eq!(branch, "prr/pr-7");
+        sh(&["switch", "-q", &branch]);
+        assert_eq!(sh(&["rev-parse", "HEAD"]), head);
+        assert_eq!(sh(&["rev-parse", "main"]), base, "main untouched");
+
+        assert!(restore_local(&dir.to_string_lossy(), "main", &branch).await.unwrap());
+        assert_eq!(sh(&["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(sh(&["rev-parse", "prr/pr-7"]), head, "the PR branch stays");
+
+        // Work committed on the PR branch is never overwritten: another branch is used.
+        sh(&["switch", "-q", "prr/pr-7"]);
+        sh(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "mine"]);
+        let mine = sh(&["rev-parse", "HEAD"]);
+        sh(&["switch", "-q", "main"]);
+        let again = pr_branch_for(&dir, &pr).await.unwrap();
+        assert_ne!(again, "prr/pr-7");
+        assert_eq!(sh(&["rev-parse", "prr/pr-7"]), mine, "the user's commit is kept");
+        assert_eq!(sh(&["rev-parse", &again]), head);
+
+        // Not restored when something changed.
+        sh(&["switch", "-q", &again]);
+        std::fs::write(dir.join("f"), "x").unwrap();
+        sh(&["add", "f"]);
+        assert!(!restore_local(&dir.to_string_lossy(), "main", &again).await.unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

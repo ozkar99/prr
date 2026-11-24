@@ -74,9 +74,9 @@ impl AppView {
         self.opening = None;
         let Some(view) = self.pr.take() else { return };
         view.update(cx, |v, cx| v.close(cx));
-        let (local, head_sha, number) = {
+        let (local, number) = {
             let v = view.read(cx);
-            (v.checkout.local.clone(), v.checkout.head_sha.clone(), v.pr.number)
+            (v.checkout.local.clone(), v.pr.number)
         };
         // A copy-on-write worktree of the user's clone goes away with its window.
         if let Some(clone) = view.read(cx).checkout.worktree_of.clone() {
@@ -85,17 +85,17 @@ impl AppView {
         }
         self.home.update(cx, |home, cx| home.refresh(cx));
         if let Some(local) = local {
-            if let Some(from) = local.switched_from.clone() {
+            if let (Some(from), Some(pr_branch)) = (local.switched_from.clone(), local.pr_branch.clone()) {
                 let path = local.path.clone();
                 let fut = backend::task({
-                    let (path, from, head_sha) = (path.clone(), from.clone(), head_sha.clone());
-                    async move { git::restore_local(&path, &from, &head_sha).await }
+                    let (path, from, pr_branch) = (path.clone(), from.clone(), pr_branch.clone());
+                    async move { git::restore_local(&path, &from, &pr_branch).await }
                 });
                 let home = self.home.clone();
                 cx.spawn(async move |_, cx| {
                     let notice = match fut.await {
-                        Ok(true) => format!("Switched your clone back to {from}."),
-                        Ok(false) => format!("Left your clone at {path} as it is: it changed after switching to PR #{number} (it was on {from})."),
+                        Ok(true) => format!("Switched your clone back to {from} (the PR stays on branch {pr_branch})."),
+                        Ok(false) => format!("Left your clone at {path} as it is: it's no longer on {pr_branch} with no changes. It was on {from} before PR #{number}."),
                         Err(e) => format!("Couldn't switch your clone back to {from}: {e}"),
                     };
                     home.update(cx, |home, cx| home.set_notice(Some(notice), cx));
