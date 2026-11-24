@@ -64,6 +64,9 @@ pub trait Language: Send + Sync {
     fn server_name(&self) -> String;
     /// How to run the server for the checkout at `root`. `None`: no server.
     fn server(&self, root: &Path) -> Option<Result<ServerSpec, String>>;
+    /// Adjusts the server for one PR (`changed`: the paths it changes), e.g.
+    /// to keep a huge repository's server to the PR's folders.
+    fn adjust_for_pr(&self, _spec: &mut ServerSpec, _root: &Path, _changed: &[String]) {}
     /// What to tell someone whose server isn't installed.
     fn install_hint(&self) -> String {
         String::new()

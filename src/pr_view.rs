@@ -623,6 +623,9 @@ impl PrView {
                 }
                 Some(Ok(spec)) => spec,
             };
+            let mut spec = spec;
+            let changed: Vec<String> = self.pr.files.iter().map(|f| f.path.clone()).collect();
+            lang.adjust_for_pr(&mut spec, std::path::Path::new(&root), &changed);
             self.lsp.insert(id.clone(), ServerEntry { status: ServerStatus::Starting, client: None, note: spec.note.clone() });
             let fut = backend::task(LspClient::start(id.clone(), spec, lang.install_hint(), root.clone()));
             cx.spawn(async move |this, cx| {
