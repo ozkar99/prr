@@ -66,21 +66,25 @@ fn s(v: &Value) -> String {
     v.as_str().unwrap_or_default().to_string()
 }
 
-pub async fn review_queue() -> Result<Vec<PRSummary>, String> {
-    let queries = [
-        ("review-requested", "is:pr is:open archived:false review-requested:@me"),
-        ("authored", "is:pr is:open archived:false author:@me"),
-    ];
-    let mut out = Vec::new();
-    for (reason, q) in queries {
-        let q = q.replace(' ', "+").replace(':', "%3A").replace('@', "%40");
-        let data = rest(&format!("/search/issues?q={q}&sort=updated&per_page=50")).await?;
-        for item in data["items"].as_array().into_iter().flatten() {
+/// One page of the home screen's PR lists: `reason` is "review-requested"
+/// or "authored". The PRs on that page and how many there are in all.
+pub async fn review_queue_page(reason: &str, page: u32, per_page: u32) -> Result<(Vec<PRSummary>, u64), String> {
+    let q = match reason {
+        "review-requested" => "is:pr is:open archived:false review-requested:@me",
+        _ => "is:pr is:open archived:false author:@me",
+    };
+    let q = q.replace(' ', "+").replace(':', "%3A").replace('@', "%40");
+    let data = rest(&format!("/search/issues?q={q}&sort=updated&per_page={per_page}&page={page}")).await?;
+    let items = data["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| {
             let repo_url = s(&item["repository_url"]);
             let mut parts = repo_url.rsplit('/');
             let repo = parts.next().unwrap_or_default().to_string();
             let owner = parts.next().unwrap_or_default().to_string();
-            out.push(PRSummary {
+            PRSummary {
                 owner,
                 repo,
                 number: item["number"].as_u64().unwrap_or_default(),
@@ -89,10 +93,10 @@ pub async fn review_queue() -> Result<Vec<PRSummary>, String> {
                 updated_at: s(&item["updated_at"]),
                 draft: item["draft"].as_bool().unwrap_or(false),
                 reason: reason.into(),
-            });
-        }
-    }
-    Ok(out)
+            }
+        })
+        .collect();
+    Ok((items, data["total_count"].as_u64().unwrap_or(0)))
 }
 
 /// Line ranges per side from the unified diff's hunk headers (`@@ -a,b +c,d @@`).
