@@ -5075,7 +5075,7 @@ dependencies = [
 
 [[package]]
 name = "review-tool"
-version = "4.1.7"
+version = "4.1.8"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
