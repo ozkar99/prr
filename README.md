@@ -79,6 +79,7 @@ missing. In a PR, each server's state shows in the header; hover a **not install
 | Rust | `.rs` | ✓ | ✓ rust-analyzer |
 | Shell | `.sh` `.bash` `.zsh` `.ksh`, `.bashrc` `.zshrc` `.profile` … | ✓ | ✓ bash-language-server (included) |
 | Starlark / Bazel | `BUILD` `WORKSPACE` `MODULE.bazel` `.bzl` `.bazel` `.star` | ✓ | ✓ starpls |
+| Markdown | `.md` `.markdown` | ✓ (code blocks in their own language) | — |
 
 Any other file shows as a plain diff, and you can still comment on it and review it as usual. Go,
 C/C++, Rust and Starlark need their server installed ([see Language servers](#language-servers)); the Python and
@@ -120,7 +121,7 @@ env = { GOFLAGS = "-mod=mod" }
 | `command`, `args`, `env` | The language server to run, in the PR's checkout. |
 | `language_id` | The LSP language id (defaults to the `id`). |
 | `initialization_options` | Sent to the server when it starts. |
-| `grammar` | Borrow a built-in grammar for syntax colors: `go`, `c`, `cpp`, `python`, `rust` or `bash`. Without one, added languages show without colors. |
+| `grammar` | Borrow a built-in grammar for syntax colors: `go`, `c`, `cpp`, `python`, `rust`, `bash` or `markdown`. Without one, added languages show without colors. |
 | `install` | Shown in the header and the setup check when the server isn't installed. |
 
 Changes apply to PRs you open afterwards. Mistakes in the file show in the home screen's setup check.

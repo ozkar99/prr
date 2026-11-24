@@ -39,9 +39,17 @@ const NAMES: &[&str] = &[
     "constructor",
     "attribute",
     "preproc",
+    "punctuation.special",
     "punctuation",
     "delimiter",
     "embedded",
+    // Markdown (tree-sitter-md's queries).
+    "text.title",
+    "text.literal",
+    "text.uri",
+    "text.reference",
+    "text.emphasis",
+    "text.strong",
 ];
 
 /// VS Code Dark Modern (Dark+) token colors for each name in [`NAMES`].
@@ -61,6 +69,12 @@ fn color_for(name: &str) -> Option<u32> {
         "label" => 0xC8C8C8,
         "preproc" => 0xC586C0,
         "attribute" => 0xDCDCAA,
+        // Markdown, as VS Code colors it: headings blue, code orange, links,
+        // list and heading markers.
+        "text.title" => 0x569CD6,
+        "text.literal" => 0xCE9178,
+        "text.uri" | "text.reference" => 0x3794FF,
+        "punctuation.special" => 0x6796E6,
         _ => return None,
     })
 }
@@ -239,6 +253,12 @@ fn lang(name: &str) -> Option<&'static Lang> {
         ),
         "bash" => cached!(BASH, build(tree_sitter_bash::LANGUAGE.into(), "bash", BASH_EXTRA, &[tree_sitter_bash::HIGHLIGHT_QUERY])),
         "rust" => cached!(RUST, build(tree_sitter_rust::LANGUAGE.into(), "rust", RUST_EXTRA, &[tree_sitter_rust::HIGHLIGHTS_QUERY])),
+        // Markdown is two grammars, blocks and inline text (see highlight_markdown).
+        "markdown_block" => cached!(MD, build(tree_sitter_md::LANGUAGE.into(), "markdown", "", &[tree_sitter_md::HIGHLIGHT_QUERY_BLOCK])),
+        "markdown_inline" => cached!(
+            MD_INLINE,
+            build(tree_sitter_md::INLINE_LANGUAGE.into(), "markdown_inline", "", &[tree_sitter_md::HIGHLIGHT_QUERY_INLINE])
+        ),
         _ => None,
     }
 }
@@ -250,7 +270,72 @@ fn style(hex: u32) -> HighlightStyle {
 
 /// Highlights `text` (a whole file, or one side of a hunk). Returns byte ranges
 /// with their styles, as gpui-component's diff view expects.
+/// A fenced code block's language ("```go") as one of our grammars.
+fn fence_grammar(name: &str) -> Option<&'static str> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "go" | "golang" => "go",
+        "rust" | "rs" => "rust",
+        "python" | "py" | "starlark" | "bzl" => "python",
+        "bash" | "sh" | "shell" | "zsh" | "console" => "bash",
+        "c" | "h" => "c",
+        "cpp" | "c++" | "cc" | "cxx" | "hpp" => "cpp",
+        _ => return None,
+    })
+}
+
+/// Markdown: the block grammar's colors (headings, markers, code blocks),
+/// then each paragraph's text with the inline grammar (emphasis, code spans,
+/// links) and each fenced code block with its own language. These replace
+/// the block colors underneath them.
+fn highlight_markdown(text: &str) -> Vec<(Range<usize>, HighlightStyle)> {
+    let mut out = highlight("markdown_block", text);
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&tree_sitter_md::LANGUAGE.into()).is_err() {
+        return out;
+    }
+    let Some(tree) = parser.parse(text, None) else { return out };
+    let mut layers: Vec<(Range<usize>, Vec<(Range<usize>, HighlightStyle)>)> = Vec::new();
+    let mut cursor = tree.walk();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            // Headings keep their heading style.
+            // Paragraph text and table cells.
+            "inline" | "pipe_table_cell" if node.parent().is_some_and(|p| !p.kind().ends_with("heading")) => {
+                let r = node.byte_range();
+                layers.push((r.clone(), highlight("markdown_inline", &text[r])));
+            }
+            "fenced_code_block" => {
+                let mut language = None;
+                let mut content = None;
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "info_string" => language = child.child(0).map(|l| &text[l.byte_range()]),
+                        "code_fence_content" => content = Some(child.byte_range()),
+                        _ => {}
+                    }
+                }
+                if let Some(r) = content {
+                    // Code shows in its own colors, or plain: not as one orange block.
+                    let inner = language.and_then(fence_grammar).map(|g| highlight(g, &text[r.clone()])).unwrap_or_default();
+                    layers.push((r, inner));
+                }
+            }
+            _ => stack.extend(node.children(&mut cursor).collect::<Vec<_>>()),
+        }
+    }
+    for (range, inner) in layers {
+        out.retain(|(r, _)| r.end <= range.start || r.start >= range.end);
+        out.extend(inner.into_iter().map(|(r, s)| (r.start + range.start..r.end + range.start, s)));
+    }
+    out.sort_by_key(|(r, _)| r.start);
+    out
+}
+
 pub fn highlight(language: &str, text: &str) -> Vec<(Range<usize>, HighlightStyle)> {
+    if language == "markdown" {
+        return highlight_markdown(text);
+    }
     let Some(lang) = lang(language) else { return Vec::new() };
     let mut highlighter = Highlighter::new();
     let Ok(events) = highlighter.highlight(&lang.config, text.as_bytes(), None, |_| None) else {
@@ -273,12 +358,24 @@ pub fn highlight(language: &str, text: &str) -> Vec<(Range<usize>, HighlightStyl
                     if name.starts_with("string") || name == "comment" || name == "escape" {
                         literal.push(start..end);
                     }
-                    if let Some(color) = color_for(name) {
-                        out.push((start..end, style(color)));
+                    match name {
+                        "text.emphasis" => out.push((start..end, HighlightStyle { font_style: Some(gpui::FontStyle::Italic), ..Default::default() })),
+                        "text.strong" => out.push((start..end, HighlightStyle { font_weight: Some(gpui::FontWeight::BOLD), ..Default::default() })),
+                        "text.title" => out.push((start..end, HighlightStyle { font_weight: Some(gpui::FontWeight::BOLD), ..style(0x569CD6) })),
+                        _ => {
+                            if let Some(color) = color_for(name) {
+                                out.push((start..end, style(color)));
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    // Brackets in prose aren't code.
+    if language.starts_with("markdown") {
+        return out;
     }
 
     // Bracket-pair colors by depth, skipping brackets in strings/comments.
@@ -353,5 +450,25 @@ mod tests {
         println!("{}", names.join("  "));
         let out = highlight("go", src);
         println!("{}", out.iter().map(|(r, st)| format!("{}:{:?}", &src[r.clone()], st.color.map(|c| gpui::Rgba::from(c)))).collect::<Vec<_>>().join("  "));
+    }
+
+    #[test]
+    fn markdown_headings_code_links_and_fences() {
+        let src = "# Title\n\nSome *soft* and **bold** text with `code` and [a link](https://x.y).\n\n```go\nfunc main() { return }\n```\n\n| A | B |\n|---|---|\n| `cell` | x |\n";
+        let out = highlight("markdown", src);
+        let at = |needle: &str| {
+            let i = src.find(needle).unwrap();
+            out.iter().find(|(r, _)| r.contains(&i)).map(|(_, s)| *s)
+        };
+        let title = at("Title").expect("heading styled");
+        assert_eq!((title.color, title.font_weight), (Some(Hsla::from(rgb(0x569CD6))), Some(gpui::FontWeight::BOLD)));
+        assert_eq!(at("soft").and_then(|s| s.font_style), Some(gpui::FontStyle::Italic));
+        assert_eq!(at("bold").and_then(|s| s.font_weight), Some(gpui::FontWeight::BOLD));
+        assert_eq!(at("code").and_then(|s| s.color), Some(Hsla::from(rgb(0xCE9178))));
+        assert_eq!(at("https").and_then(|s| s.color), Some(Hsla::from(rgb(0x3794FF))));
+        assert_eq!(at("return").and_then(|s| s.color), Some(Hsla::from(rgb(0xC586C0))), "Go inside a ```go fence");
+        assert!(at("text with").is_none(), "plain prose stays plain");
+        assert_eq!(at("cell").and_then(|s| s.color), Some(Hsla::from(rgb(0xCE9178))), "code in a table cell");
+        assert!(at(" main()").is_none(), "code without a color stays plain, not one orange block");
     }
 }
