@@ -103,7 +103,13 @@ pub struct Output {
 }
 
 /// Runs gh with `args` (and `input` on stdin) from the repo's clone.
+/// One gh at a time: a company wrapper around gh may run git in the repo
+/// (status, remote, config), and two at once collide on git's locks (exit
+/// code 128, a git status left running).
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub async fn run(args: &[&str], input: Option<&[u8]>) -> Result<Output, String> {
+    let _turn = ONE_AT_A_TIME.lock().await;
     let folder = folder();
     let home = std::env::var("HOME").unwrap_or("/".into());
     // Fast path: gh as a program, with the environment your shell sets up in
