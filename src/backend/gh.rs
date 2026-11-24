@@ -99,22 +99,41 @@ pub struct Output {
 
 /// Runs gh with `args` (and `input` on stdin) from the repo's clone.
 pub async fn run(args: &[&str], input: Option<&[u8]>) -> Result<Output, String> {
-    let (shell, full) = invocation(args);
+    let folder = folder();
     let home = std::env::var("HOME").unwrap_or("/".into());
-    let mut command = tokio::process::Command::new(&shell);
-    command.args(&full).current_dir(&home).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
-    match folder() {
-        // The shell starts at home and cds there itself, so its cd hooks run.
-        Some(f) => command.env("PRR_GH_DIR", f),
-        None => command.env_remove("PRR_GH_DIR"),
+    // Fast path: gh as a program, with the environment your shell sets up in
+    // this folder (captured once, see `session`).
+    let (program, args_vec, cwd, env): (String, Vec<String>, String, Option<Vec<(String, String)>>) = match session(folder.as_deref()).await {
+        Some(sess) => (sess.gh.clone(), args.iter().map(|a| a.to_string()).collect(), folder.clone().unwrap_or(home.clone()), Some(sess.env.clone())),
+        None => {
+            let (shell, full) = invocation(args);
+            (shell, full, home.clone(), None)
+        }
     };
+    let mut command = tokio::process::Command::new(&program);
+    command.args(&args_vec).current_dir(&cwd);
+    match &env {
+        Some(env) => {
+            command.env_clear().envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        }
+        // The shell starts at home and cds there itself, so its cd hooks run.
+        None => match &folder {
+            Some(f) => {
+                command.env("PRR_GH_DIR", f);
+            }
+            None => {
+                command.env_remove("PRR_GH_DIR");
+            }
+        },
+    }
+    command.env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
     let mut child = command
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("couldn't run gh through {shell}: {e}"))?;
+        .map_err(|e| format!("couldn't run gh ({program}): {e}"))?;
     if let (Some(bytes), Some(mut stdin)) = (input, child.stdin.take()) {
         stdin.write_all(bytes).await.map_err(|e| e.to_string())?;
     }
@@ -127,6 +146,70 @@ pub async fn run(args: &[&str], input: Option<&[u8]>) -> Result<Output, String> 
         return Err(format!("gh isn't installed. Run: {HOW_TO_FIX}"));
     }
     Ok(Output { ok: out.status.success(), stdout: String::from_utf8_lossy(&out.stdout).into_owned(), stderr })
+}
+
+/// What your shell sets up for gh in one folder: the gh program it finds and
+/// the environment. Starting the shell (and its startup files, a company
+/// wrapper's setup…) for every gh call is slow, so it's done once per folder
+/// and reused for 10 minutes (in case that setup hands out short-lived tokens).
+#[derive(Clone)]
+struct Session {
+    gh: String,
+    env: Vec<(String, String)>,
+    at: std::time::Instant,
+}
+
+static SESSIONS: tokio::sync::Mutex<BTreeMap<String, Session>> = tokio::sync::Mutex::const_new(BTreeMap::new());
+
+/// The session for `folder`, or None to run gh through the shell each time
+/// (gh is a shell function or alias there, or capturing failed).
+async fn session(folder: Option<&str>) -> Option<Session> {
+    let key = folder.unwrap_or("").to_string();
+    let mut sessions = SESSIONS.lock().await;
+    if let Some(s) = sessions.get(&key).filter(|s| s.at.elapsed() < Duration::from_secs(600)) {
+        return (!s.gh.is_empty()).then(|| s.clone());
+    }
+    let captured = capture(folder).await.unwrap_or(Session { gh: String::new(), env: Vec::new(), at: std::time::Instant::now() });
+    sessions.insert(key, captured.clone());
+    (!captured.gh.is_empty()).then_some(captured)
+}
+
+const MARK: &str = "\u{1}PRR_SESSION\u{1}";
+
+/// Runs your shell once, as a terminal would (login, interactive, cd'd into
+/// the folder), and reads where `gh` resolves and the environment.
+async fn capture(folder: Option<&str>) -> Option<Session> {
+    let shell = user_shell();
+    let fish = shell.ends_with("fish");
+    let script = if fish {
+        "test -n \"$PRR_GH_DIR\"; and cd $PRR_GH_DIR; printf '\\001PRR_SESSION\\001'; command -v gh; printf '\\001PRR_SESSION\\001'; env -0".to_string()
+    } else {
+        "[ -n \"$PRR_GH_DIR\" ] && cd -- \"$PRR_GH_DIR\"; printf '\\001PRR_SESSION\\001'; command -v gh; printf '\\001PRR_SESSION\\001'; env -0".to_string()
+    };
+    let home = std::env::var("HOME").unwrap_or("/".into());
+    let mut command = tokio::process::Command::new(&shell);
+    command.args(["-l", "-i", "-c", &script]).current_dir(&home).stdin(Stdio::null()).kill_on_drop(true);
+    match folder {
+        Some(f) => command.env("PRR_GH_DIR", f),
+        None => command.env_remove("PRR_GH_DIR"),
+    };
+    let out = tokio::time::timeout(Duration::from_secs(30), command.output()).await.ok()?.ok()?;
+    parse_session(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_session(stdout: &str) -> Option<Session> {
+    let mut parts = stdout.split(MARK);
+    parts.next()?; // whatever the startup files printed
+    let gh = parts.next()?.trim().to_string();
+    // Only a program: a shell function or alias has to run through the shell.
+    if !gh.starts_with('/') {
+        return Some(Session { gh: String::new(), env: Vec::new(), at: std::time::Instant::now() });
+    }
+    let env: Vec<(String, String)> = parts.next()?.split('\0').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    if env.is_empty() {
+        return None;
+    }
+    Some(Session { gh, env, at: std::time::Instant::now() })
 }
 
 /// `gh api`: a REST path ("repos/o/r/pulls/1") or "graphql", with an
@@ -156,6 +239,26 @@ pub async fn api(path: &str, body: Option<&Value>) -> Result<Value, String> {
         });
     }
     json.ok_or_else(|| format!("gh api {path}: unexpected reply: {}", out.stdout.chars().take(200).collect::<String>()))
+}
+
+/// `gh api --paginate` for a REST list: every page's items, in one gh call.
+pub async fn api_all(path: &str) -> Result<Vec<Value>, String> {
+    let path = path.trim_start_matches('/');
+    let out = run(&["api", "--paginate", path], None).await?;
+    if !out.ok {
+        return Err(format!("GitHub: {}", out.stderr.trim().lines().last().unwrap_or("gh api failed").trim_start_matches("gh: ")));
+    }
+    // gh prints each page's array one after another: [..][..]
+    let text = out.stdout;
+    let start = text.find('[').ok_or_else(|| format!("gh api {path}: unexpected reply"))?;
+    let mut items = Vec::new();
+    for page in serde_json::Deserializer::from_str(&text[start..]).into_iter::<Value>() {
+        match page.map_err(|e| e.to_string())? {
+            Value::Array(page) => items.extend(page),
+            other => items.push(other),
+        }
+    }
+    Ok(items)
 }
 
 /// The JSON in gh's output, skipping anything shell startup files printed first.
@@ -191,6 +294,22 @@ mod tests {
         assert_eq!(json_in("Welcome!\n{\"login\":\"me\"}\n").unwrap()["login"], "me");
         assert!(json_in("[1,2]").unwrap().is_array());
         assert!(json_in("nothing").is_none());
+    }
+
+    #[test]
+    fn reads_paginated_pages() {
+        let text = "[{\"a\":1},{\"a\":2}]\n[{\"a\":3}]";
+        let items: Vec<Value> = serde_json::Deserializer::from_str(text).into_iter::<Value>().flat_map(|p| p.unwrap().as_array().cloned().unwrap()).collect();
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn reads_a_shell_session() {
+        let s = parse_session(&format!("Welcome!\n{MARK}/opt/corp/bin/gh\n{MARK}PATH=/opt/corp/bin:/usr/bin\0GH_ENTERPRISE_TOKEN=x\0")).unwrap();
+        assert_eq!(s.gh, "/opt/corp/bin/gh");
+        assert!(s.env.contains(&("GH_ENTERPRISE_TOKEN".into(), "x".into())));
+        let f = parse_session(&format!("{MARK}gh\n{MARK}PATH=/usr/bin\0")).unwrap();
+        assert!(f.gh.is_empty(), "a function or alias runs through the shell");
     }
 
     #[test]

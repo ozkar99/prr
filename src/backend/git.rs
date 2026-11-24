@@ -83,13 +83,32 @@ async fn matching_remote(repo: &Path, owner: &str, name: &str) -> Option<String>
 async fn fetch_into_clone(pr: &PRDetails, repo: &Path, progress: &impl Fn(String)) -> Result<(PathBuf, String), String> {
     let top = git(&["rev-parse", "--show-toplevel"], Some(repo)).await.map_err(|_| format!("{} isn't a git clone", repo.display()))?;
     let top = PathBuf::from(top.trim());
+    // Only what's missing: in a big clone the base commit is usually there
+    // already, and so is the PR head if it was fetched before.
+    let has = |sha: String| {
+        let top = top.clone();
+        async move { git(&["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(&top)).await.is_ok() }
+    };
+    let mut refs: Vec<String> = Vec::new();
+    if !has(pr.head_sha.clone()).await {
+        refs.push(format!("refs/pull/{}/head", pr.number));
+    }
+    if !has(pr.base_sha.clone()).await {
+        refs.push(format!("refs/heads/{}", pr.base_ref));
+    }
+    if refs.is_empty() {
+        let merge_base = git(&["merge-base", &pr.base_sha, &pr.head_sha], Some(&top)).await?.trim().to_string();
+        return Ok((top, merge_base));
+    }
     progress(format!("Fetching PR #{} into your clone…", pr.number));
-    let pr_ref = format!("refs/pull/{}/head", pr.number);
-    let base_ref = format!("refs/heads/{}", pr.base_ref);
     let github = remote_url(&pr.owner, &pr.repo).await;
     let fetch = |remote: String| {
-        let (top, pr_ref, base_ref) = (top.clone(), pr_ref.clone(), base_ref.clone());
-        async move { git(&["fetch", "--no-tags", "--no-write-fetch-head", &remote, &pr_ref, &base_ref], Some(&top)).await }
+        let (top, refs) = (top.clone(), refs.clone());
+        async move {
+            let mut args = vec!["fetch", "--no-tags", "--no-write-fetch-head", remote.as_str()];
+            args.extend(refs.iter().map(String::as_str));
+            git(&args, Some(&top)).await
+        }
     };
     match matching_remote(&top, &pr.owner, &pr.repo).await {
         // The clone's own remote (its credentials, possibly an internal mirror); a

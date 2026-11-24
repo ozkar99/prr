@@ -106,27 +106,22 @@ pub async fn get_pr(owner: &str, repo: &str, number: u64) -> Result<PRDetails, S
 }
 
 async fn get_pr_inner(owner: &str, repo: &str, number: u64) -> Result<PRDetails, String> {
-    let pr = rest(&format!("/repos/{owner}/{repo}/pulls/{number}")).await?;
-    let mut files = Vec::new();
-    // GitHub caps this listing at 3000 files.
-    for page in 1..=30 {
-        let batch = rest(&format!("/repos/{owner}/{repo}/pulls/{number}/files?per_page=100&page={page}")).await?;
-        let items = batch.as_array().cloned().unwrap_or_default();
-        let len = items.len();
-        for f in items {
-            files.push(PRFile {
-                path: s(&f["filename"]),
-                previous_path: f["previous_filename"].as_str().map(String::from),
-                status: s(&f["status"]),
-                additions: f["additions"].as_u64().unwrap_or_default(),
-                deletions: f["deletions"].as_u64().unwrap_or_default(),
-                commentable: f["patch"].as_str().map(commentable_ranges),
-            });
-        }
-        if len < 100 {
-            break;
-        }
-    }
+    // The PR and its files at once; all pages of files in one gh call
+    // (GitHub caps the listing at 3000 files).
+    let (pr_path, files_path) = (format!("/repos/{owner}/{repo}/pulls/{number}"), format!("/repos/{owner}/{repo}/pulls/{number}/files?per_page=100"));
+    let (pr, items) = tokio::join!(rest(&pr_path), gh::api_all(&files_path));
+    let (pr, items) = (pr?, items?);
+    let files = items
+        .iter()
+        .map(|f| PRFile {
+            path: s(&f["filename"]),
+            previous_path: f["previous_filename"].as_str().map(String::from),
+            status: s(&f["status"]),
+            additions: f["additions"].as_u64().unwrap_or_default(),
+            deletions: f["deletions"].as_u64().unwrap_or_default(),
+            commentable: f["patch"].as_str().map(commentable_ranges),
+        })
+        .collect();
     Ok(PRDetails {
         owner: owner.into(),
         repo: repo.into(),
