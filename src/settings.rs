@@ -34,11 +34,15 @@ pub struct Settings {
     pub github_account: String,
     /// The gh command prr runs; empty: `gh`, the way your shell runs it.
     pub gh_command: String,
+    /// The folder gh runs in; empty: the clone prr last opened a PR in.
+    pub gh_folder: String,
+    /// The clone prr last opened a PR in (remembered automatically).
+    pub last_clone: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: false, github_account: String::new(), gh_command: String::new() }
+        Self { agent_command: String::new(), editor_font_size: EDITOR_FONT.0, terminal_font_size: TERMINAL_FONT.0, agent_panel_height: 300., sidebar_width: 300., split_ratio: 0.5, trust_claude_checkouts: false, github_account: String::new(), gh_command: String::new(), gh_folder: String::new(), last_clone: String::new() }
     }
 }
 
@@ -54,6 +58,11 @@ pub fn load() -> Settings {
 }
 
 impl Settings {
+    /// The folder gh runs in: the one set, or else the last clone.
+    pub fn gh_folder_in_use(&self) -> &str {
+        if self.gh_folder.trim().is_empty() { &self.last_clone } else { &self.gh_folder }
+    }
+
     fn save(&self) {
         let _ = std::fs::create_dir_all(data_dir());
         let tmp = path().with_extension("json.tmp");
@@ -88,6 +97,7 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
 fn apply(cx: &mut App) {
     crate::backend::auth::set_account(&get(cx).github_account);
     crate::backend::auth::set_gh_command(&get(cx).gh_command);
+    crate::backend::auth::set_folder(get(cx).gh_folder_in_use());
     let size = get(cx).editor_font_size;
     gpui_component::Theme::global_mut(cx).mono_font_size = px(size);
     gpui_component::Theme::sync_base(cx);
@@ -105,6 +115,7 @@ pub enum SettingsEvent {
 pub struct SettingsView {
     agent_command: Entity<InputState>,
     gh_command: Entity<InputState>,
+    gh_folder: Entity<InputState>,
     /// The gh command the account list was loaded with.
     checked_gh: String,
     /// gh's github.com accounts (None: still loading).
@@ -144,8 +155,23 @@ impl SettingsView {
             InputEvent::PressEnter { .. } | InputEvent::Blur => this.gh_changed(cx),
             _ => {}
         });
-        let mut this = Self { agent_command, gh_command, accounts: None, checked_gh: String::new(), focus: cx.focus_handle(), _subs: vec![sub, gh_sub] };
-        this.checked_gh = get(cx).gh_command.clone();
+        let (current_folder, last_clone) = (get(cx).gh_folder.clone(), get(cx).last_clone.clone());
+        let gh_folder = cx.new(|cx| {
+            let placeholder = if last_clone.is_empty() { "Automatic: the clone you last ran prr in".to_string() } else { format!("Automatic: {last_clone}") };
+            let mut state = InputState::new(window, cx).placeholder(placeholder);
+            state.set_value(current_folder, window, cx);
+            state
+        });
+        let folder_sub = cx.subscribe(&gh_folder, |this: &mut Self, input, ev: &InputEvent, cx| match ev {
+            InputEvent::Change => {
+                let value = input.read(cx).value().trim().to_string();
+                update(cx, |s| s.gh_folder = value);
+            }
+            InputEvent::PressEnter { .. } | InputEvent::Blur => this.gh_changed(cx),
+            _ => {}
+        });
+        let mut this = Self { agent_command, gh_command, gh_folder, accounts: None, checked_gh: String::new(), focus: cx.focus_handle(), _subs: vec![sub, gh_sub, folder_sub] };
+        this.checked_gh = gh_key(get(cx));
         this.load_accounts(cx);
         this
     }
@@ -165,7 +191,7 @@ impl SettingsView {
     }
 
     fn gh_changed(&mut self, cx: &mut Context<Self>) {
-        let current = get(cx).gh_command.clone();
+        let current = gh_key(get(cx));
         if current == self.checked_gh {
             return;
         }
@@ -228,6 +254,11 @@ impl SettingsView {
     }
 }
 
+/// What decides which gh runs, and where: a change means checking GitHub access again.
+fn gh_key(s: &Settings) -> String {
+    format!("{}\n{}", s.gh_command, s.gh_folder_in_use())
+}
+
 fn stepper(id: &'static str, value: f32, (default, min, max): (f32, f32, f32), set: fn(&mut Settings, f32), cx: &mut Context<SettingsView>) -> impl IntoElement {
     let step = move |delta: f32| move |_: &ClickEvent, _: &mut Window, cx: &mut App| update(cx, |s| set(s, (value + delta).clamp(min, max)));
     div()
@@ -268,6 +299,7 @@ impl Render for SettingsView {
         if !self.focus.contains_focused(window, cx)
             && !self.agent_command.read(cx).focus_handle(cx).is_focused(window)
             && !self.gh_command.read(cx).focus_handle(cx).is_focused(window)
+            && !self.gh_folder.read(cx).focus_handle(cx).is_focused(window)
         {
             window.focus(&self.focus, cx);
         }
@@ -338,6 +370,16 @@ impl Render for SettingsView {
                             .gap(px(6.))
                             .child(Input::new(&self.gh_command))
                             .child(ui::muted("prr runs gh through your login shell, so a wrapper function or alias around gh (one that sets a company token, say) is used too. Set a path (/usr/local/bin/corp-gh) or another command name to run that instead. Press Enter to check it.").text_size(theme::TEXT_SMALL)),
+                    ))
+                    .child(row(
+                        "Run gh in",
+                        Some("A clone of the repo you review."),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(Input::new(&self.gh_folder))
+                            .child(ui::muted("gh runs as if you had cd'd into this folder in a terminal, so whatever sets its environment there (direnv, mise, your company's per-repo settings) applies. Leave empty to use the clone you last ran prr in. Press Enter to check it.").text_size(theme::TEXT_SMALL)),
                     ))
                     .child(row(
                         "Agent command",

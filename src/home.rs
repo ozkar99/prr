@@ -158,6 +158,10 @@ impl Home {
     }
 
     pub fn open(&mut self, owner: String, repo: String, number: u64, local_repo: Option<String>, local_worktree: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        // Remember the clone: gh runs there from now on (see Settings → Run gh in).
+        if let Some(path) = local_repo.clone() {
+            crate::settings::update(cx, |s| s.last_clone = path);
+        }
         self.pending_switch = None;
         self.notice = None;
         self.error = None;
