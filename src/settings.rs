@@ -96,6 +96,9 @@ pub enum SettingsEvent {
 
 pub struct SettingsView {
     agent_command: Entity<InputState>,
+    /// Disk used by prr's own copies (None: still measuring).
+    usage: Option<crate::backend::cleanup::DiskUsage>,
+    clearing: bool,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -116,7 +119,77 @@ impl SettingsView {
                 update(cx, |s| s.agent_command = value);
             }
         });
-        Self { agent_command, focus: cx.focus_handle(), _subs: vec![sub] }
+        let mut this = Self { agent_command, usage: None, clearing: false, focus: cx.focus_handle(), _subs: vec![sub] };
+        this.load_usage(cx);
+        this
+    }
+
+    fn load_usage(&mut self, cx: &mut Context<Self>) {
+        let fut = crate::backend::blocking(crate::backend::cleanup::usage);
+        cx.spawn(async move |this, cx| {
+            let usage = fut.await;
+            this.update(cx, |this, cx| {
+                this.usage = Some(usage);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn clear(&mut self, include_clones: bool, cx: &mut Context<Self>) {
+        if self.clearing {
+            return;
+        }
+        self.clearing = true;
+        let fut = crate::backend::task(crate::backend::cleanup::clear(include_clones));
+        cx.spawn(async move |this, cx| {
+            fut.await;
+            this.update(cx, |this, cx| {
+                this.clearing = false;
+                this.load_usage(cx);
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn render_storage(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(u) = &self.usage else { return ui::muted("Measuring…").text_size(theme::TEXT_SMALL).into_any_element() };
+        let clearing = self.clearing;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(4.))
+                    .child(format!("{} · {}", ui::plural(u.worktrees, "PR checkout"), ui::size(u.worktree_bytes)))
+                    .child(ui::muted(format!("· {} · {}", ui::plural(u.repos, "cloned repo"), ui::size(u.repo_bytes)))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        ui::button("clear-checkouts", if clearing { "Clearing…" } else { "Clear PR checkouts" })
+                            .when(clearing || u.worktrees == 0, |el| el.opacity(0.5))
+                            .on_click(cx.listener(|this, _, _, cx| this.clear(false, cx))),
+                    )
+                    .child(
+                        ui::button("clear-everything", "Clear everything")
+                            .when(clearing, |el| el.opacity(0.5))
+                            .on_click(cx.listener(|this, _, _, cx| this.clear(true, cx))),
+                    ),
+            )
+            .child(
+                ui::muted("Clear everything also removes the repositories prr downloaded itself. Your own clones are never touched. Checkouts not opened for 14 days are removed automatically.")
+                    .text_size(theme::TEXT_SMALL),
+            )
+            .into_any_element()
     }
 }
 
@@ -254,6 +327,7 @@ impl Render for SettingsView {
                             )
                             .child(ui::muted("The panel's Claude Code is read-only and ignores the repository's own settings, hooks and MCP servers, which is what that prompt protects against. When on, the app marks the PR's repository as trusted in ~/.claude.json before starting it.").text_size(theme::TEXT_SMALL)),
                     ))
+                    .child(row("Storage", Some("prr's own copies of repositories and PR checkouts."), self.render_storage(cx)))
                     .child(row("Editor font size", Some("Code in diffs and files."), stepper("editor-font", s.editor_font_size, EDITOR_FONT, |s, v| s.editor_font_size = v, cx)))
                     .child(row("Terminal font size", Some("The agent panel."), stepper("terminal-font", s.terminal_font_size, TERMINAL_FONT, |s, v| s.terminal_font_size = v, cx)))
                     .child(div().pt(px(10.)).text_size(theme::TEXT_SMALL).text_color(hsla(theme::MUTED)).child(format!("Saved in {}", path().display()))),

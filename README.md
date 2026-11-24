@@ -175,7 +175,7 @@ opened for 14 days, are removed when prr starts; quitting prr stops the backgrou
   contents, so even a big repo's first PR opens quickly) and a checkout per PR.
 
 The app's own copies live in `~/Library/Application Support/review-tool/`. Checkouts you haven't
-opened for 14 days are removed automatically, and the **Storage** section of the home screen
+opened for 14 days are removed automatically, and **Settings → Storage** (⌘,)
 shows their size with buttons to clear them. Your own clones are never touched by cleanup.
 
 ## Reading the code

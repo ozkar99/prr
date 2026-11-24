@@ -1,6 +1,6 @@
 //! The home screen (web: App.tsx + SetupCheck.tsx + Storage.tsx): setup check,
 //! "open a PR" field, the PR queue, storage, and the "switch your clone?" dialog.
-use crate::backend::{self, cleanup::DiskUsage, deps::ToolStatus, git, github, types::*};
+use crate::backend::{self, deps::ToolStatus, git, github, types::*};
 use crate::theme::{self, hsla};
 use crate::ui;
 use futures::StreamExt as _;
@@ -23,12 +23,11 @@ struct PendingSwitch {
 
 pub struct Home {
     input: Entity<InputState>,
-    queue: Option<Result<Vec<PRSummary>, String>>,
+    /// The two PR lists ("review-requested", "authored"), loaded a page at a time.
+    lists: [PrList; 2],
     tools: Option<Vec<ToolStatus>>,
     show_optional: bool,
     checking: bool,
-    usage: Option<DiskUsage>,
-    clearing: bool,
     busy: Option<String>,
     error: Option<String>,
     notice: Option<String>,
@@ -37,6 +36,27 @@ pub struct Home {
 }
 
 impl EventEmitter<HomeEvent> for Home {}
+
+/// PRs per page of the home screen's lists.
+const PAGE_SIZE: u32 = 10;
+
+struct PrList {
+    reason: &'static str,
+    label: &'static str,
+    items: Vec<PRSummary>,
+    /// How many PRs GitHub has for this list in all.
+    total: u64,
+    /// Pages loaded so far.
+    pages: u32,
+    loading: bool,
+    error: Option<String>,
+}
+
+impl PrList {
+    fn new(reason: &'static str, label: &'static str) -> Self {
+        Self { reason, label, items: Vec::new(), total: 0, pages: 0, loading: false, error: None }
+    }
+}
 
 impl Home {
     /// Whether it's busy opening a PR.
@@ -63,12 +83,10 @@ impl Home {
         });
         Self {
             input,
-            queue: None,
+            lists: [PrList::new("review-requested", "Review requested"), PrList::new("authored", "Your pull requests")],
             tools: None,
             show_optional: false,
             checking: false,
-            usage: None,
-            clearing: false,
             busy: None,
             error: None,
             notice: None,
@@ -87,7 +105,6 @@ impl Home {
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.check_tools(cx);
-        self.load_usage(cx);
     }
 
     // ---- Setup check (git + a logged-in gh are required; the queue waits for them) ----
@@ -113,39 +130,37 @@ impl Home {
     }
 
     fn load_queue(&mut self, cx: &mut Context<Self>) {
-        let fut = backend::task(github::review_queue());
+        for ix in 0..self.lists.len() {
+            self.lists[ix] = PrList::new(self.lists[ix].reason, self.lists[ix].label);
+            self.load_page(ix, cx);
+        }
+    }
+
+    /// Loads the next page of one list (each list on its own, so one failing
+    /// doesn't hide the other).
+    fn load_page(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let list = &mut self.lists[ix];
+        if list.loading {
+            return;
+        }
+        list.loading = true;
+        list.error = None;
+        let (reason, page) = (list.reason, list.pages + 1);
+        let fut = backend::task(async move { github::review_queue_page(reason, page, PAGE_SIZE).await });
         cx.spawn(async move |this, cx| {
             let result = fut.await;
             this.update(cx, |this, cx| {
-                this.queue = Some(result);
+                let list = &mut this.lists[ix];
+                list.loading = false;
+                match result {
+                    Ok((items, total)) => {
+                        list.items.extend(items);
+                        list.total = total;
+                        list.pages = page;
+                    }
+                    Err(e) => list.error = Some(e),
+                }
                 cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn load_usage(&mut self, cx: &mut Context<Self>) {
-        let fut = backend::blocking(backend::cleanup::usage);
-        cx.spawn(async move |this, cx| {
-            let usage = fut.await;
-            this.update(cx, |this, cx| {
-                this.usage = Some(usage);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn clear(&mut self, include_clones: bool, cx: &mut Context<Self>) {
-        self.clearing = true;
-        let fut = backend::task(backend::cleanup::clear(include_clones));
-        cx.spawn(async move |this, cx| {
-            fut.await;
-            this.update(cx, |this, cx| {
-                this.clearing = false;
-                this.load_usage(cx);
             })
             .ok();
         })
@@ -397,25 +412,23 @@ impl Home {
     fn render_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.busy.is_some();
         let mut col = div().flex().flex_col();
-        let Some(queue) = &self.queue else {
-            return col.child(ui::muted("Loading…"));
-        };
-        let items = match queue {
-            Ok(items) => items.clone(),
-            Err(e) => return col.child(ui::copy_error("queue-error", format!("Couldn't load pull requests: {e}"))),
-        };
-        for (label, reason) in [("Review requested", "review-requested"), ("Your pull requests", "authored")] {
-            let group: Vec<PRSummary> = items.iter().filter(|p| p.reason == reason).cloned().collect();
+        for (ix, list) in self.lists.iter().enumerate() {
+            let title = if list.total > 0 { format!("{} ({})", list.label, list.total) } else { list.label.to_string() };
             col = col.child(
                 div()
                     .mt(px(20.))
                     .mb(px(6.))
                     .text_size(theme::TEXT_SMALL)
                     .text_color(hsla(theme::MUTED))
-                    .child(label.to_uppercase()),
+                    .child(title.to_uppercase()),
             );
+            let group: Vec<PRSummary> = list.items.clone();
             if group.is_empty() {
-                col = col.child(ui::muted("None"));
+                col = col.child(match (&list.error, list.loading) {
+                    (Some(e), _) => ui::copy_error(SharedString::from(format!("queue-error-{ix}")), format!("Couldn't load pull requests: {e}")).into_any_element(),
+                    (None, true) => ui::muted("Loading…").into_any_element(),
+                    (None, false) => ui::muted("None").into_any_element(),
+                });
                 continue;
             }
             let count = group.len();
@@ -483,74 +496,19 @@ impl Home {
                             )
                     })),
             );
+            let more = (list.total as usize).saturating_sub(list.items.len());
+            col = col
+                .when_some(list.error.clone(), |el, e| el.child(div().mt(px(6.)).child(ui::copy_error(SharedString::from(format!("queue-more-error-{ix}")), format!("Couldn't load more: {e}")))))
+                .when(more > 0, |el| {
+                    el.child(
+                        div().mt(px(8.)).child(
+                            ui::link(SharedString::from(format!("more-{ix}")), if list.loading { "Loading…".to_string() } else { format!("Show {} more ({more} left)", more.min(PAGE_SIZE as usize)) })
+                                .on_click(cx.listener(move |this, _, _, cx| this.load_page(ix, cx))),
+                        ),
+                    )
+                });
         }
         col
-    }
-
-    fn render_storage(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let u = self.usage.as_ref()?;
-        if u.worktrees == 0 && u.repos == 0 {
-            return None;
-        }
-        let clearing = self.clearing;
-        Some(
-            div()
-                .mt(px(28.))
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .mb(px(6.))
-                        .text_size(theme::TEXT_SMALL)
-                        .text_color(hsla(theme::MUTED))
-                        .child("STORAGE"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(4.))
-                                .child(format!("{} · {}", ui::plural(u.worktrees, "PR checkout"), ui::size(u.worktree_bytes)))
-                                .child(ui::muted(format!("· {} · {}", ui::plural(u.repos, "cloned repo"), ui::size(u.repo_bytes)))),
-                        )
-                        .child(ui::spacer())
-                        .child(
-                            ui::button("clear-checkouts", "Clear PR checkouts")
-                                .when(clearing || u.worktrees == 0, |el| el.opacity(0.5))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !this.clearing {
-                                        this.clear(false, cx)
-                                    }
-                                })),
-                        )
-                        .child(
-                            ui::button("clear-everything", "Clear everything")
-                                .when(clearing, |el| el.opacity(0.5))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if !this.clearing {
-                                        this.clear(true, cx)
-                                    }
-                                })),
-                        ),
-                )
-                .child(
-                    div()
-                        .mt(px(6.))
-                        .text_size(theme::TEXT_SMALL)
-                        .text_color(hsla(theme::MUTED))
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(4.))
-                        .child("Checkouts not opened for 14 days are removed automatically. Run")
-                        .child(ui::code("prr"))
-                        .child("inside your own clone of a repo to review its PRs there, with no extra copy."),
-                )
-                .into_any_element(),
-        )
     }
 }
 
@@ -617,13 +575,11 @@ impl Render for Home {
                                     .gap(px(12.))
                                     .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child("Pull requests"))
                                     .child(ui::link("refresh", "Refresh").on_click(cx.listener(|this, _, _, cx| {
-                                        this.queue = None;
                                         this.load_queue(cx);
                                         cx.notify();
                                     }))),
                             )
-                            .child(self.render_queue(cx))
-                            .children(self.render_storage(cx)),
+                            .child(self.render_queue(cx)),
                     ),
             )
     }
